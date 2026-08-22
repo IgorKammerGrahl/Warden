@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -183,7 +184,7 @@ func TestRootRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if err := parsed.Verify(pub); err != nil {
+	if err := parsed.Verify(NewJWK(pub)); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 
@@ -255,11 +256,11 @@ func TestDerivedChainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse derived: %v", err)
 	}
-	if err := parsedRoot.Verify(rootPub); err != nil {
+	if err := parsedRoot.Verify(NewJWK(rootPub)); err != nil {
 		t.Fatalf("Verify root: %v", err)
 	}
 	// The derived token is signed by the parent's holder key, per draft §7.
-	if err := parsedDerived.Verify(rootPub); err != nil {
+	if err := parsedDerived.Verify(NewJWK(rootPub)); err != nil {
 		t.Fatalf("Verify derived: %v", err)
 	}
 
@@ -303,7 +304,7 @@ func TestVerifyRejectsTamperedClaims(t *testing.T) {
 	if err != nil {
 		return // parse-time rejection is also a rejection
 	}
-	if err := parsed.Verify(pub); err == nil {
+	if err := parsed.Verify(NewJWK(pub)); err == nil {
 		t.Error("Verify accepted a token with a raised del_max_depth")
 	}
 }
@@ -499,7 +500,7 @@ func TestPoPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePoP: %v", err)
 	}
-	if err := pop.Verify(pub); err != nil {
+	if err := pop.Verify(NewJWK(pub)); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 
@@ -560,6 +561,83 @@ func TestPoPStructuralRules(t *testing.T) {
 	}
 }
 
+// TestVerifyRejectsAlgKeyMismatch covers draft §7 steps 3a/4a/7a and the
+// post-algorithm note. The key here carries the CORRECT Ed25519 public bytes in
+// x, so the signature would verify under an alternate interpretation of the
+// key's type — the draft requires denial anyway, on kty/crv alone.
+func TestVerifyRejectsAlgKeyMismatch(t *testing.T) {
+	priv, pub := keypair(t)
+	tok, err := Mint(rootClaims(t, pub), priv)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	parsed, err := Parse(tok.Compact())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	good := NewJWK(pub)
+
+	tests := []struct {
+		name string
+		key  *JWK
+	}{
+		{"nil key", nil},
+		{"EC kty with correct key bytes", &JWK{Kty: "EC", Crv: "P-256", X: good.X}},
+		{"RSA kty with correct key bytes", &JWK{Kty: "RSA", Crv: "Ed25519", X: good.X}},
+		{"OKP but X25519 curve", &JWK{Kty: "OKP", Crv: "X25519", X: good.X}},
+		{"OKP but Ed448 curve", &JWK{Kty: "OKP", Crv: "Ed448", X: good.X}},
+		{"kty absent", &JWK{Crv: "Ed25519", X: good.X}},
+		{"crv absent", &JWK{Kty: "OKP", X: good.X}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := parsed.Verify(tt.key)
+			if err == nil {
+				t.Fatal("Verify accepted a key inconsistent with the declared alg")
+			}
+			// The denial must come from the algorithm/key binding, not from the
+			// signature check: reaching ErrSignature would mean the bytes were
+			// interpreted before the type was rejected.
+			if errors.Is(err, jws.ErrSignature) {
+				t.Errorf("Verify reached signature verification: %v", err)
+			}
+		})
+	}
+
+	// The same token still verifies under a consistent key.
+	if err := parsed.Verify(good); err != nil {
+		t.Errorf("Verify rejected a consistent key: %v", err)
+	}
+}
+
+func TestPoPVerifyRejectsAlgKeyMismatch(t *testing.T) {
+	priv, pub := keypair(t)
+	compact, err := SignPoP(PoPClaims{
+		JTI:      "c980f2a1-4a37-4e88-bb3c-9defd37c1a45",
+		IssuedAt: 1741600300,
+		TokenID:  "01957a41-0081-7c20-bf3a-00a0c91e1234",
+		Tool:     "read_file",
+		Args:     map[string]any{},
+	}, priv)
+	if err != nil {
+		t.Fatalf("SignPoP: %v", err)
+	}
+	pop, err := ParsePoP(compact)
+	if err != nil {
+		t.Fatalf("ParsePoP: %v", err)
+	}
+
+	mismatched := &JWK{Kty: "EC", Crv: "P-256", X: NewJWK(pub).X}
+	if err := pop.Verify(mismatched); err == nil {
+		t.Error("PoP Verify accepted a key inconsistent with the declared alg")
+	} else if errors.Is(err, jws.ErrSignature) {
+		t.Errorf("PoP Verify reached signature verification: %v", err)
+	}
+	if err := pop.Verify(NewJWK(pub)); err != nil {
+		t.Errorf("PoP Verify rejected a consistent key: %v", err)
+	}
+}
+
 // FuzzParse exercises the token decode path. Draft §7 step 2c extracts jti from
 // an unverified payload before signature verification, so this runs on
 // attacker-controlled bytes and must never panic.
@@ -591,7 +669,7 @@ func FuzzParse(f *testing.F) {
 		if parsed.Claims.Confirmation.JWK == nil {
 			t.Fatalf("Parse accepted a token without cnf.jwk: %q", s)
 		}
-		_ = parsed.Verify(pub)
+		_ = parsed.Verify(NewJWK(pub))
 		_ = ParentHash(parsed)
 	})
 }

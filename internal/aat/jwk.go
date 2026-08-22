@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/igorkg/warden/internal/aat/jws"
 )
 
 // ThumbprintURIPrefix is the RFC 9278 JWK Thumbprint URI prefix for SHA-256.
@@ -78,6 +80,38 @@ func (j *JWK) ThumbprintURI() (string, error) {
 		return "", err
 	}
 	return ThumbprintURIPrefix + tp, nil
+}
+
+// algKeyTypes binds each permitted JWS algorithm to the key type it requires.
+// Draft §7 steps 3a, 4a and 7a make this a check separate from the §8.13
+// allowlist: the allowlist says the algorithm is one we accept, this says the
+// algorithm matches the key we are about to verify against.
+var algKeyTypes = map[jws.Algorithm]struct{ Kty, Crv string }{
+	jws.EdDSA: {Kty: "OKP", Crv: "Ed25519"},
+}
+
+// checkAlgorithm rejects a declared alg that is inconsistent with this key's
+// kty and crv.
+//
+// §7's post-algorithm note requires denial "regardless of whether the signature
+// bytes would verify under an alternate interpretation", which is why callers
+// run this BEFORE signature verification rather than as a fallback after it: an
+// attacker who can choose the key type must not be able to reach the signature
+// check at all.
+func (j *JWK) checkAlgorithm(alg jws.Algorithm) error {
+	if j == nil {
+		return errors.New("aat: no verifying key")
+	}
+	want, ok := algKeyTypes[alg]
+	if !ok {
+		return fmt.Errorf("aat: algorithm %q has no key type binding", alg)
+	}
+	if j.Kty != want.Kty || j.Crv != want.Crv {
+		return fmt.Errorf(
+			"aat: alg %q requires kty %q crv %q, verifying key is kty %q crv %q (§7 steps 3a/4a/7a)",
+			alg, want.Kty, want.Crv, j.Kty, j.Crv)
+	}
+	return nil
 }
 
 // privateJWKMembers are every member that carries private key material across

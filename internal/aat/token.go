@@ -159,8 +159,19 @@ func Parse(compact string) (*Token, error) {
 // not walk a chain, does not check I1-I5, and does not evaluate constraints.
 // The caller selects key — a trust anchor for a root token, the parent's
 // cnf.jwk for a derived one — and that selection is chain verification's job.
-func (t *Token) Verify(key ed25519.PublicKey) error {
-	return t.msg.Verify(key)
+//
+// key is a JWK rather than a raw public key so that the §7 algorithm/key
+// consistency check is possible at all: an ed25519.PublicKey cannot express the
+// mismatch the check exists to catch.
+func (t *Token) Verify(key *JWK) error {
+	if err := key.checkAlgorithm(t.msg.Header.Alg); err != nil {
+		return err
+	}
+	pub, err := key.PublicKey()
+	if err != nil {
+		return err
+	}
+	return t.msg.Verify(pub)
 }
 
 // Compact returns the wire form.

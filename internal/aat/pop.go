@@ -106,8 +106,15 @@ func ParsePoP(compact string) (*PoP, error) {
 // Verify checks the PoP signature against key, which the caller takes from the
 // leaf token's cnf.jwk. It does not check freshness (§5.3), audience, or that
 // aat_tool names a tool the leaf token authorizes — those are M0b.
-func (p *PoP) Verify(key ed25519.PublicKey) error {
-	return p.msg.Verify(key)
+func (p *PoP) Verify(key *JWK) error {
+	if err := key.checkAlgorithm(p.msg.Header.Alg); err != nil {
+		return err
+	}
+	pub, err := key.PublicKey()
+	if err != nil {
+		return err
+	}
+	return p.msg.Verify(pub)
 }
 
 // Compact returns the wire form.
