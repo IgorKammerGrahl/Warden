@@ -61,9 +61,8 @@ func SignPoP(c PoPClaims, key ed25519.PrivateKey) (string, error) {
 
 // ParsePoP decodes and structurally validates a PoP JWT without verifying it.
 func ParsePoP(compact string) (*PoP, error) {
-	if len(compact) > MaxTokenSize {
-		return nil, fmt.Errorf("aat: PoP is %d bytes, exceeds MaxTokenSize %d",
-			len(compact), MaxTokenSize)
+	if err := checkSize("PoP", len(compact)); err != nil {
+		return nil, err
 	}
 
 	msg, err := jws.Parse(compact)

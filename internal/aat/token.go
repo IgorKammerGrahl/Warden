@@ -22,11 +22,22 @@ import (
 	"github.com/igorkg/warden/internal/aat/jws"
 )
 
-// MaxTokenSize bounds the encoded size of a single token. Draft §4.3.1 requires
-// implementations to enforce a finite limit and RECOMMENDS 64 KiB.
-// ponytail: a constant, not configuration. Make it a parameter when a
-// deployment actually presents a token near the limit.
-const MaxTokenSize = 65536
+// DefaultMaxTokenSize is the value draft §4.3.1 RECOMMENDS.
+const DefaultMaxTokenSize = 65536
+
+// MaxTokenSize bounds the encoded size of a single token. §4.3.1 requires
+// implementations to enforce a finite limit; 64 KiB is only a RECOMMENDATION,
+// so this is operator configuration.
+//
+// Set it once at startup, before any token is parsed. It is a plain package
+// variable rather than a field on a parser: nothing in this milestone needs two
+// limits in one process, and a mutable global read concurrently is only safe
+// because it is written once. Give it a home on a config struct when the daemon
+// grows one.
+//
+// A non-positive value is a misconfiguration, not "unlimited": §4.3.1 requires
+// the limit to be finite, so Parse fails closed rather than disabling the check.
+var MaxTokenSize = DefaultMaxTokenSize
 
 // Confirmation is the RFC 7800 cnf claim. Draft §3.2 requires it to carry the
 // holder's public key as jwk.
@@ -107,9 +118,8 @@ func Mint(c Claims, key ed25519.PrivateKey) (*Token, error) {
 // signature — draft §7 step 2c requires reading jti from an unverified payload
 // before signature verification, so this path runs on attacker-controlled bytes.
 func Parse(compact string) (*Token, error) {
-	if len(compact) > MaxTokenSize {
-		return nil, fmt.Errorf("aat: token is %d bytes, exceeds MaxTokenSize %d",
-			len(compact), MaxTokenSize)
+	if err := checkSize("token", len(compact)); err != nil {
+		return nil, err
 	}
 
 	msg, err := jws.Parse(compact)
@@ -172,6 +182,19 @@ func (t *Token) Verify(key *JWK) error {
 		return err
 	}
 	return t.msg.Verify(pub)
+}
+
+// checkSize enforces the §4.3.1 MAX_TOKEN_SIZE limit.
+func checkSize(kind string, n int) error {
+	if MaxTokenSize <= 0 {
+		return fmt.Errorf("aat: MaxTokenSize is %d; §4.3.1 requires a finite positive limit",
+			MaxTokenSize)
+	}
+	if n > MaxTokenSize {
+		return fmt.Errorf("aat: %s is %d bytes, exceeds MaxTokenSize %d",
+			kind, n, MaxTokenSize)
+	}
+	return nil
 }
 
 // Compact returns the wire form.

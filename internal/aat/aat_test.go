@@ -638,6 +638,34 @@ func TestPoPVerifyRejectsAlgKeyMismatch(t *testing.T) {
 	}
 }
 
+func TestMaxTokenSizeIsConfigurable(t *testing.T) {
+	priv, pub := keypair(t)
+	tok, err := Mint(rootClaims(t, pub), priv)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	compact := tok.Compact()
+
+	defer func(n int) { MaxTokenSize = n }(MaxTokenSize)
+
+	MaxTokenSize = len(compact) - 1
+	if _, err := Parse(compact); err == nil {
+		t.Error("Parse accepted a token larger than MaxTokenSize")
+	}
+
+	MaxTokenSize = len(compact)
+	if _, err := Parse(compact); err != nil {
+		t.Errorf("Parse rejected a token exactly at MaxTokenSize: %v", err)
+	}
+
+	// §4.3.1 requires a finite limit, so a non-positive value fails closed
+	// rather than meaning "unlimited".
+	MaxTokenSize = 0
+	if _, err := Parse(compact); err == nil {
+		t.Error("Parse treated MaxTokenSize 0 as unlimited")
+	}
+}
+
 // FuzzParse exercises the token decode path. Draft §7 step 2c extracts jti from
 // an unverified payload before signature verification, so this runs on
 // attacker-controlled bytes and must never panic.
