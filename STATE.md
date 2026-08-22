@@ -14,7 +14,9 @@ canonicalization. No constraint semantics, no chain verification.
 - AAT draft-01 vendored at `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt`.
   **All future section citations resolve against that file, not against
   quotations copied into our own docs.**
-- M0a implemented and green — see "M0a exit criteria" below.
+- M0a in progress. `internal/aat/jcs` (RFC 8785) and `internal/aat/jws`
+  (compact serialization, Ed25519, alg allowlist) are implemented and green.
+  `internal/aat` (claims, JWK, PoP) is partially written and does not compile.
 
 ## Next 3 tasks
 
@@ -65,9 +67,9 @@ canonicalization. No constraint semantics, no chain verification.
 
 | Criterion | Status |
 |---|---|
-| Round-trip a signed root token and a signed derived token (mint → serialize → parse → verify signature) | met — `TestRoundTripRootToken`, `TestRoundTripDerivedChain` |
-| Every RFC 8785 test vector passes byte-for-byte | met — `TestRFC8785Vectors`, no vector skipped |
-| `go test -fuzz` clean on decode and JCS, no panics | met — `FuzzParse`, `FuzzCanonicalize`, `FuzzCanonicalizeRoundTrip` |
+| Round-trip a signed root token and a signed derived token (mint → serialize → parse → verify signature) | **not met** — tests written (`TestRootRoundTrip`, `TestDerivedChainRoundTrip`), `internal/aat` implementation incomplete |
+| Every RFC 8785 test vector passes byte-for-byte | met — `internal/aat/jcs`, 61 subtests, 0 skipped, no vector adjusted |
+| `go test -fuzz` clean on decode and JCS, no panics | **not met** — fuzz targets exist (`FuzzCanonicalize`, `jws.FuzzParse`, `aat.FuzzParse`); no `-fuzz` run has been executed yet |
 
 ## Conventions in force
 
