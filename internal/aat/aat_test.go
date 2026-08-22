@@ -86,6 +86,75 @@ func TestRFC8037Thumbprint(t *testing.T) {
 	}
 }
 
+// TestRFC7638RSAThumbprint checks the thumbprint *construction* against the
+// RSA vector RFC 7638 §3.1 publishes. Our JWK type is OKP-only, so this cannot
+// go through Thumbprint; what it validates is the rule Thumbprint depends on —
+// required members only, lexicographic order, no whitespace, SHA-256,
+// base64url-nopad — against a vector produced by someone else.
+func TestRFC7638RSAThumbprint(t *testing.T) {
+	const (
+		n = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86z" +
+			"wu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5Js" +
+			"GY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMic" +
+			"AtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-" +
+			"bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csF" +
+			"Cur-kEgU8awapJzKnqDKgw"
+		want = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+	)
+	// RFC 7638 §3.1: the RSA required members are e, kty, n. alg and kid are
+	// present in the source JWK and MUST be excluded.
+	ordered := struct {
+		E   string `json:"e"`
+		Kty string `json:"kty"`
+		N   string `json:"n"`
+	}{"AQAB", "RSA", n}
+
+	raw, err := json.Marshal(ordered)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	if got := base64.RawURLEncoding.EncodeToString(sum[:]); got != want {
+		t.Errorf("RSA thumbprint = %q, want %q (RFC 7638 §3.1)", got, want)
+	}
+}
+
+// TestParseRejectsPrivateKeyMaterial covers §3.2 ("private key material MUST
+// NOT appear in this field") and §7 steps 3l and 4b2, for every private member
+// of every JWK key type — not only OKP's d, which is the only one our own JWK
+// struct decodes.
+func TestParseRejectsPrivateKeyMaterial(t *testing.T) {
+	priv, pub := keypair(t)
+	jwk := NewJWK(pub)
+
+	for _, member := range []string{"d", "p", "q", "dp", "dq", "qi", "oth", "k"} {
+		t.Run(member, func(t *testing.T) {
+			base, err := json.Marshal(rootClaims(t, pub))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(base, &m); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			m["cnf"] = map[string]any{"jwk": map[string]any{
+				"kty": jwk.Kty, "crv": jwk.Crv, "x": jwk.X, member: "c2VjcmV0",
+			}}
+			payload, err := json.Marshal(m)
+			if err != nil {
+				t.Fatalf("marshal mutated: %v", err)
+			}
+			compact, err := jws.Sign(jws.Header{Alg: jws.EdDSA}, payload, priv)
+			if err != nil {
+				t.Fatalf("Sign: %v", err)
+			}
+			if _, err := Parse(compact); err == nil {
+				t.Errorf("Parse accepted cnf.jwk carrying %q", member)
+			}
+		})
+	}
+}
+
 func TestJWKPublicKeyRoundTrip(t *testing.T) {
 	_, pub := keypair(t)
 	got, err := NewJWK(pub).PublicKey()

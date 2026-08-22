@@ -80,6 +80,37 @@ func (j *JWK) ThumbprintURI() (string, error) {
 	return ThumbprintURIPrefix + tp, nil
 }
 
+// privateJWKMembers are every member that carries private key material across
+// the key types of RFC 7517/7518/8037: the RSA private exponent, primes and CRT
+// values, the EC and OKP private scalar, and the symmetric key. Draft §3.2 says
+// private key material MUST NOT appear in cnf, and §7 steps 3l and 4b2 make
+// rejecting it part of verification.
+//
+// This is checked against the raw JSON rather than the decoded JWK because a
+// member we do not decode is a member we cannot reject: an RSA key smuggled in
+// as cnf.jwk would otherwise be turned away for its kty, reporting the wrong
+// reason and only by luck.
+var privateJWKMembers = []string{"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+
+// checkNoPrivateKeyMaterial rejects a cnf object whose jwk carries any private
+// member.
+func checkNoPrivateKeyMaterial(rawCnf json.RawMessage) error {
+	var cnf struct {
+		JWK map[string]json.RawMessage `json:"jwk"`
+	}
+	if err := json.Unmarshal(rawCnf, &cnf); err != nil {
+		return fmt.Errorf("aat: cnf is not an object: %w", err)
+	}
+	for _, member := range privateJWKMembers {
+		if _, ok := cnf.JWK[member]; ok {
+			return fmt.Errorf(
+				"aat: cnf.jwk carries private key member %q (§3.2; §7 steps 3l, 4b2)",
+				member)
+		}
+	}
+	return nil
+}
+
 // check enforces the shape of an Ed25519 public JWK.
 func (j *JWK) check() error {
 	if j == nil {
