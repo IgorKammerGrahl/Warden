@@ -1,3 +1,3 @@
 module github.com/igorkg/warden
 
-go 1.26.5
+go 1.24
