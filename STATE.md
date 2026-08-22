@@ -14,9 +14,10 @@ canonicalization. No constraint semantics, no chain verification.
 - AAT draft-01 vendored at `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt`.
   **All future section citations resolve against that file, not against
   quotations copied into our own docs.**
-- M0a in progress. `internal/aat/jcs` (RFC 8785) and `internal/aat/jws`
-  (compact serialization, Ed25519, alg allowlist) are implemented and green.
-  `internal/aat` (claims, JWK, PoP) is partially written and does not compile.
+- **M0a complete.** `internal/aat/jcs` (RFC 8785), `internal/aat/jws` (compact
+  serialization, Ed25519, §8.13 alg allowlist), `internal/aat` (§3.2 claims,
+  RFC 7638/9278 thumbprints, §4.6 par_hash, §5.2 PoP). 179 tests, 0 failures,
+  0 skipped. All three exit criteria met — see the table below.
 
 ## Next 3 tasks
 
@@ -67,9 +68,28 @@ canonicalization. No constraint semantics, no chain verification.
 
 | Criterion | Status |
 |---|---|
-| Round-trip a signed root token and a signed derived token (mint → serialize → parse → verify signature) | **not met** — tests written (`TestRootRoundTrip`, `TestDerivedChainRoundTrip`), `internal/aat` implementation incomplete |
-| Every RFC 8785 test vector passes byte-for-byte | met — `internal/aat/jcs`, 61 subtests, 0 skipped, no vector adjusted |
-| `go test -fuzz` clean on decode and JCS, no panics | **not met** — fuzz targets exist (`FuzzCanonicalize`, `jws.FuzzParse`, `aat.FuzzParse`); no `-fuzz` run has been executed yet |
+| Round-trip a signed root token and a signed derived token (mint → serialize → parse → verify signature) | met — `TestRootRoundTrip`, `TestDerivedChainRoundTrip` |
+| Every RFC 8785 test vector passes byte-for-byte | met — `internal/aat/jcs`, 61 tests / 52 subtests, 0 skipped, no expected value adjusted |
+| `go test -fuzz` clean on decode and JCS, no panics | met — 60s each, 0 crashers: jcs 4.25M execs, jws 8.56M, aat 9.02M |
+
+Cross-implementation vectors, not just self-consistency: RFC 8785 Appendix B
+(all 24 valid number rows, keyed by IEEE 754 bits), RFC 8785 §3.2.2/§3.2.3
+(worked example against the published hex dump; property sorting), RFC 8037
+Appendix A (Ed25519 JWS compact serialization reproduced byte for byte;
+published JWK thumbprint), RFC 7638 §3.1 (RSA thumbprint construction).
+
+### Deliberately NOT in M0a, for M0b to pick up
+
+- §3.3 "root and leaf tokens MUST contain exactly one `attenuating_agent_token`
+  entry". Single-token checkable for roots, but leaf-ness is not, and it needs
+  `authorization_details` parsed rather than opaque. Deferred with the rest of
+  the capability model.
+- `MAX_DELEGATION_DEPTH` (§4.3) and `MAX_IAT_SKEW` / `MAX_TOKEN_LIFETIME`
+  (§4.4). All are enforcement-time policy; `MAX_TOKEN_SIZE` (§4.3.1) *is*
+  enforced now, at 65536, because it bounds attacker-controlled decode.
+- Unrecognized claims are ignored and NOT preserved across decode. `Token` is
+  never re-serialized; `Payload()` and `SigningInput()` return the signed bytes.
+  A future `invocation_constraints` reader takes them from there.
 
 ## Conventions in force
 
