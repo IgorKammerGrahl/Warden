@@ -22,3 +22,6 @@ coverage.txt
 *.swp
 .idea/
 .vscode/
+
+# rapid property-test failure repros (regenerated on demand)
+internal/*/testdata/rapid/
