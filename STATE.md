@@ -1,14 +1,14 @@
 # warden — STATE
 
-Updated: 2026-08-23 (M0b2 closed)
+Updated: 2026-08-23 (M1 closed)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
-to start M1 without re-exploring the repo.
+to start M2 without re-exploring the repo.
 
 ## Current position
 
-**M0a, M0b1 and M0b2 are complete.** M1 has not started.
+**M0a, M0b1, M0b2 and M1 are complete.** M2 has not started.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -23,10 +23,16 @@ size check, cycle detection, root anchoring, per-link verification, capability
 projection, invocation authorization, PoP. `core.Subsumes` finally has a
 caller — §7 step 4p4.
 
-**The library is feature-complete for offline chain verification.** What does
-not exist is everything above it: no proxy, no MCP, no audit log, no policy
-file, no key management, no revocation, no interop test against another
-implementation. That is M1 onward.
+M1 added the first code above the library: `wardend`, an MCP stdio proxy that
+relays JSON-RPC between a client and one upstream server and writes an audit
+record per `tools/call`. It calls nothing in `internal/core` and nothing in
+`internal/aat` except the JCS canonicalizer, and that only to digest arguments.
+
+**The library is feature-complete for offline chain verification, and nothing
+enforces it yet.** What does not exist: no allow/deny anywhere, no policy file,
+no key management, no revocation, no counters, no HTTP/SSE transport, no
+`wardenctl audit tail`, no interop test against another implementation. That is
+M2 onward.
 
 ---
 
@@ -41,6 +47,10 @@ internal/aat/jcs/                            RFC 8785 JSON canonicalization
 internal/aat/jws/                            RFC 7515 compact serialization, Ed25519 only
 internal/aat/                                AAT claim set, JWK/thumbprints, PoP JWT
 internal/core/                               domain: §3.4 constraints, §3.3 capabilities, I1-I4
+internal/audit/                              the ARCHITECTURE §6 decision record, JSONL, latency stats
+internal/proxy/                              the M1 relay: framing, _meta extraction, correlation
+internal/testserver/                         ~100-line stdio MCP server, the e2e's upstream peer
+cmd/wardend/                                 the daemon: flags, subprocess, wiring, latency report
 ```
 
 **All section citations (§x.y) resolve against the vendored draft**, never
@@ -258,6 +268,163 @@ Three things a caller must know:
 3. **`Check` takes `encoding/json` output** — `float64`, `[]any`,
    `map[string]any`, `nil`. `1` and `1.0` are the same argument value, the same
    identification RFC 8785 makes upstream.
+
+---
+
+## M1 exit state
+
+`wardend` fronts one upstream MCP server over stdio. It spawns the server as a
+subprocess, relays JSON-RPC in both directions, and writes one audit record per
+`tools/call`. Every exit criterion is covered by a test in `cmd/wardend` or
+`internal/proxy`; `go test ./... -race` is green.
+
+**Zero enforcement, and that is structural.** There is no call to
+`aat.Verifier`, `core.Subsumes` or any authorization check anywhere in the
+request path — `internal/proxy` does not import `internal/core` at all, and
+imports `internal/aat/jcs` only so `audit.ArgsDigest` can canonicalize
+arguments before hashing them. Decision is always `passthrough`. The reason is
+not "M2 will do it": M1's latency figures are the control M4 measures its
+enforcement overhead against, so a `Verify` call here, even one whose result is
+discarded, would put Ed25519 work into the baseline and deflate M4's reported
+overhead. ROADMAP M1 says this explicitly now; it previously said the opposite.
+
+### What the proxy does with `_meta`
+
+Extracts, never interprets. `dev.warden/chain`, `dev.warden/pop` and
+`dev.warden/spec` (ARCHITECTURE §3.1) are recorded as presence, token count and
+byte size; no token is parsed. Absent is not an error in M1 — a chain that is
+absent, partial or malformed is recorded with that outcome and forwarded, which
+is §3.1's log-only exception. The record's `chain.root_jti`, `chain.leaf_jti`,
+`chain.depth`, `chain.max_depth`, `pop.jti`, `pop.aud` and `budget_state` are
+`omitempty`/null and stay that way until M2 has something to put in them —
+absent rather than zero-valued, because a zero claims a check ran.
+
+### Framing
+
+`json.Decoder` + `json.RawMessage`, one JSON value per `Decode`, and the exact
+received bytes are what gets forwarded. Two consequences worth keeping:
+
+- Partial reads, several messages in one read, and notifications with no `id`
+  all fall out of the decoder; there is no length-prefix state machine and no
+  `bufio.Scanner` (whose 64 KiB default token cap loses against a 256 KiB
+  `MAX_STACK_SIZE` chain).
+- **Re-serializing is forbidden, not merely slower.** A decode/encode round trip
+  reorders object members and can reformat numbers, which is exactly what JCS
+  exists in this repo to prevent. The comment in `clientToServer` says so.
+
+Message and newline go out in a **single** `Write`. Two writes leave a peer
+holding an unterminated message, and on an unbuffered pipe a reader that stops
+at the end of a value never unblocks the second write — that deadlocked the
+first version of the framing test.
+
+A pending `tools/call` is registered in the correlation map **before** the
+forward, not after: a fast upstream can have its response decoded by the other
+pump before a post-write registration lands, and that response would find no
+pending call and go unaudited.
+
+### stdout is protocol-only
+
+One writer to stdout, the proxy. Diagnostics, the upstream's own stderr and the
+closing latency report all go to stderr; the audit log goes to its own file
+(`-audit`, `-` means stderr). `stdoutIsProtocolOnly` in the failure tests fails
+if any line on the client's stdout is not valid JSON.
+
+### Failure handling
+
+- **Upstream dies mid-request.** The unanswered call still gets a record, with
+  a `forward` trace step whose outcome is `unanswered`. A proxy that silently
+  drops it makes exactly that failure invisible.
+- **Upstream emits non-JSON.** The direction is terminated rather than
+  resynchronized: a JSON stream has no defined resume point after malformed
+  bytes, and guessing one means forwarding message boundaries chosen by
+  whatever produced them. Because the client only sees the connection die, the
+  stderr diagnostic is deliberately loud — it names the direction
+  (`upstream -> proxy`), the byte offset, and that the close was deliberate and
+  not a crash.
+- **Client closes stdin.** Closing the client's stdin closes the upstream's, so
+  a healthy server exits on its own.
+
+`Run` takes whichever pump returns first, then closes both `ServerIn` and
+`ClientIn` so the surviving pump's blocked `Read` returns through Go's poller
+instead of hanging.
+
+### How "no goroutine leak" is measured
+
+`runtime.NumGoroutine()` before the test, then again after teardown, polling to
+a 2-second deadline for the count to return to baseline; the test fails with a
+full `runtime.Stack` dump if it does not. No dependency was added for this —
+`goleak` would have been the project's second dependency and does not earn it.
+
+The bounded wait is not slack in the assertion. `NumGoroutine` is a sample, not
+a barrier: a pump can have returned from `Run` while its goroutine is still a
+few instructions from exiting, so comparing immediately fails healthy code. A
+goroutine genuinely blocked forever on a read from a closed pipe — the failure a
+bidirectional stdio relay actually produces — never goes away, so the deadline
+cannot hide one. All three failure tests check the count, not just the exit code.
+
+### The e2e, and why it does not use npx
+
+`internal/testserver` is a ~100-line Go stdio MCP server (`initialize`,
+`tools/list`, `tools/call echo`), re-execed from the test binary under
+`WARDEN_TEST_ROLE`. It is the e2e's peer so the test runs offline and in CI;
+depending on `npx @modelcontextprotocol/server-everything` would make the
+transparency claim rest on a registry being reachable.
+
+`TestProxyIsInvisible` runs the same conversation twice — once straight at the
+server, once through `wardend` — and compares **the response payloads byte for
+byte**, not merely that both succeeded.
+
+**Manual check against the real thing (2026-08-23): passed.**
+`@modelcontextprotocol/server-everything` did fetch, and a full
+initialize / initialized / tools/list / tools/call conversation through
+`wardend` returned `Echo: through warden` with the binding recorded
+(`chain 2 tokens, 24B; pop 12B`) and 27 µs of overhead. It is not the repo's
+e2e and nothing in CI depends on it.
+
+### The latency baseline — this is M4's control
+
+Measured over 500 `tools/call` through the proxy against `internal/testserver`
+(`go test -run TestLatencyBaseline ./cmd/wardend -v`), nearest-rank
+percentiles, no interpolation:
+
+```
+              p50      p99
+total        ~53 µs  ~105 µs   first byte in from client -> last byte out to client
+upstream     ~21 µs   ~57 µs   first byte out to upstream -> last byte in from upstream
+overhead     ~30 µs   ~55 µs   total - upstream
+```
+
+Three independent runs on this machine landed within a few microseconds of each
+other. Do not quote these as a spec; re-run them on the machine that produces
+M4's numbers.
+
+**The convention M4 must reuse.** The spans are wall clock, and `upstream`
+includes pipe transit in **both** directions. That residue is real
+proxy-attributable cost booked to the server's column by convention, not by
+measurement — a different convention moves the overhead figure, so M4 has to
+know which one produced the baseline. Three further choices that go with it:
+
+- `total` starts at **first byte received**, not at "message decoded", so the
+  decode of a message that may run to `MAX_STACK_SIZE` is inside the overhead.
+  `internal/proxy/stamp.go` exists only to make that timestamp available.
+- The audit write happens **after** the response reaches the client, so disk
+  latency is outside the measured span by construction.
+- The three fields are truncated to whole microseconds independently, so
+  `overhead_us` and `latency_us - upstream_us` may disagree by 1.
+
+`-passthrough-only` is redundant today and load-bearing in M2: it is what lets
+this control be re-measured on a binary that has enforcement compiled in.
+`Proxy.Run` refuses to start unless it is set, so the flag cannot quietly mean
+nothing.
+
+### Deliberately not done in M1
+
+- **`audit.Writer` is synchronous under a mutex**, not §6's async writer. One
+  record per tool call is not a throughput problem. Marked `ponytail:`.
+- **§6's "audit failure ⇒ fail closed" is not implemented.** It is an M2
+  obligation: M1 denies nothing, so there is no decision to withhold.
+- **No `wardenctl audit tail`.** The log is JSONL; `jq` reads it.
+- **stdio only.** HTTP/SSE stays deferred post-M3.
 
 ---
 
@@ -533,13 +700,21 @@ signature, it is in the wrong package.
 
 ## Next 3 tasks
 
-1. **M1 — MCP proxy passthrough + audit**, log-only mode. The first code above
-   the library: an MCP proxy that sees every tool invocation, resolves the
-   presented chain and PoP through `aat.Verifier`, and **logs the decision
-   without enforcing it**. Log-only is the point — it is how a deployment finds
-   out that warden denies a call some real agent makes, before a denial breaks
-   anything. Expect the first findings to be NOTES.md #5 shaped: legitimate
-   attenuations across a (derived, parent) type pair §4.5 never declared.
+1. **M2 — Enforcement.** Wire `aat.Verifier` into `proxy.clientToServer`, gated
+   so `-passthrough-only` still bypasses it, and turn `decision` into
+   allow/deny. The audit record already has the shape; M2 fills the fields M1
+   left absent (`root_jti`, `leaf_jti`, `depth`, `max_depth`, `pop.jti`,
+   `pop.aud`, `budget_state`) and appends the real §3.2 pipeline stages to
+   `trace`, each with its normative `ref`. Start log-only against real traffic
+   before flipping the flag — it is how a deployment finds out that warden
+   denies a call some real agent makes, before a denial breaks anything. Expect
+   the first findings to be NOTES.md #5 shaped: legitimate attenuations across
+   a (derived, parent) type pair §4.5 never declared.
+
+   Two things M1 leaves on the table for M2 specifically: `aat.Parse` still
+   discards unrecognized claims, so `invocation_constraints` (ADR 0001) has
+   nothing to read; and §6's "audit failure ⇒ deny" needs implementing once
+   there is a decision to withhold.
 
 2. **Interop with the Tenuo reference implementation**
    (`github.com/tenuo-ai/tenuo`, draft Appendix E) as a test target: a
@@ -556,7 +731,7 @@ signature, it is in the wrong package.
    the §10.3.1 finding from the previous pass, are now resolvable against real
    text rather than against our own quotation. Scheduled for the M2 pass.
 
-Deferred out of M0b2 on purpose, none of it blocking M1:
+Deferred out of M0b2 on purpose, none of it blocked M1, all of it in M2's way:
 
 - **Revocation (§8.9) and `jti` replay caching.** `Verifier` detects a repeated
   `jti` *within one presented chain* (step 2c cycle detection) and nothing

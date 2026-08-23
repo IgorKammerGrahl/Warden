@@ -79,15 +79,26 @@ the `invocation_constraints` monotone set rule here (ADR 0001); their stateful
 ## M1 — MCP proxy passthrough + audit
 
 `wardend` fronts one upstream MCP server over **stdio** (HTTP/SSE deferred
-post-M3), full enforcement pipeline running in **log-only** mode: reads the
-`_meta` binding (ARCHITECTURE §3.1) when present, runs §7 verification and the
-capability/PoP checks, records the decision trace, forwards regardless.
+post-M3), relaying every message and denying nothing: it reads the `_meta`
+binding (ARCHITECTURE §3.1) when present, records **presence, size and shape
+only**, and forwards. **Zero calls to §7 verification — no `Verify`, no
+capability check, no PoP check, nowhere in the request path.** Absent or
+malformed `_meta` is recorded and forwarded; fail-closed is M2.
+
+**The zero-verification rule is load-bearing, not a shortcut.** M1's latency
+numbers are the control M4's enforcement overhead is measured against, so the
+M1 request path must contain no authorization decision at all — a `Verify` call
+here, even one whose result is discarded, puts Ed25519 work into the baseline
+and silently deflates M4's reported overhead. The `-passthrough-only` flag
+exists from M1 so the same control can be re-measured on an M2 binary.
 
 - Demo: point an off-the-shelf MCP client at `wardend`, watch
-  `wardenctl audit tail` narrate every call with would-be decisions.
-- Exit: transparent passthrough (client can't tell); every call audited;
-  measured proxy overhead baseline (p50/p99) recorded — this number is the
-  M4 control.
+  `wardenctl audit tail` narrate every call — decision `passthrough`, with what
+  the binding carried.
+- Exit: transparent passthrough (client can't tell — response payloads compared
+  byte for byte against calling the server directly); every call audited;
+  measured proxy overhead baseline (p50/p99) recorded with its measurement
+  convention stated — this number is the M4 control.
 
 ## M2 — Enforcement
 
