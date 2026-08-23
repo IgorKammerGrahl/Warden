@@ -1,10 +1,11 @@
 # warden — Roadmap
 
-Status: **DRAFT — Phase 1 correction pass (rev. 3, 2026-08-03).** D1–D3 resolved,
+Status: **DRAFT — Phase 1 correction pass (rev. 4, 2026-08-23).** D1–D3 resolved,
 so no milestone is decision-blocked. Each milestone is independently demoable and
-gated on the previous one. Rev. 3 splits M0 into **M0a** (encoding + crypto) and
-**M0b** (semantics) with a manual gate between them; **M1–M5 keep their
-identifiers unchanged.**
+gated on the previous one. Rev. 3 split M0 into **M0a** (encoding + crypto) and
+**M0b** (semantics) with a manual gate between them. Rev. 4 records M2's split
+into **M2a** (the stateless path, shipped) and **M2b** (enforcement state,
+folded into M3); **M1 and M3–M5 keep their identifiers unchanged.**
 
 ---
 
@@ -102,18 +103,50 @@ exists from M1 so the same control can be re-measured on an M2 binary.
 
 ## M2 — Enforcement
 
-Flip the pipeline live: allow/deny on leaf capability claims (closed-world
-argument checking) + PoP + static YAML operator policy; stateful
-`dev.warden/budget` and `dev.warden/rate` counters with **per-branch accounting**
-(D5/D11 — leaf and every ancestor charged atomically on PERMIT); the
-`extensions.invocation_constraints` gate, off by default, rejecting rather than
-ignoring a chain that carries the member; PoP `jti` replay set; lineage revocation;
-fail-closed everywhere including counter-state loss (D6).
+**Split during execution.** M2 as written below is two milestones' worth of
+work: a stateless half that turns the §7 algorithm into a live authorization
+decision, and a stateful half — counters, replay sets, revocation — that is
+really a question about where enforcement state lives. **M2a shipped; M2b is
+folded into M3**, where the four unresolved ADR 0001 state issues are settled
+before a second state store is built on an unsettled answer.
+
+### M2a — the stateless path (**done, 2026-08-23**)
+
+Allow/deny on leaf capability claims (closed-world argument checking) + PoP,
+the full ARCHITECTURE §3.2 pipeline in `internal/proxy`, fail-closed on every
+binding failure, and the `extensions.invocation_constraints` gate rejecting
+rather than ignoring a chain that carries the member. Denials reach the client
+as JSON-RPC -32001 carrying the stage and the normative ref, and the audit
+record carries the same ref. `-trust-anchors` is mandatory to start enforcing;
+`-passthrough-only` preserves M1's control path on the same binary.
+
+- Exit, met: a three-token chain authorizes a permitted call end-to-end; an
+  out-of-authority call is denied with a client-visible error and an audit
+  trace naming the clause; every fail-closed bind path has a test; latency
+  reported passthrough vs enforcing at depths 1/3/5 (see STATE.md).
+- Found and fixed on the way: a `tools/call` sent as a **notification** has no
+  `id` and was therefore invisible to a correlation-based relay — it would have
+  been forwarded unverified, and a caller does not need a response for the side
+  effect to land.
+- Found and raised: RFC 8785 canonicalizes numbers through binary64, so §7 step
+  7f cannot distinguish two integers above 2^53 (NOTES.md #7). warden denies
+  them at bind.
+
+### M2b — the stateful path (**deferred into M3**)
+
+Static YAML operator policy; stateful `dev.warden/budget` and `dev.warden/rate`
+counters with **per-branch accounting** (D5/D11 — leaf and every ancestor
+charged atomically on PERMIT); `invocation_constraints` enforced rather than
+merely gated; PoP `jti` replay set (§8.5), which needs the per-tool
+irreversibility classification the protocol does not carry (NOTES.md #9);
+lineage revocation; fail-closed on counter-state loss (D6).
 
 - Demo: same client, a leaf token authorizing `fs.read` with
   `path: {one_of: [...]}` and a `dev.warden/rate` of 10 calls — allowed calls
   pass; the 11th, an `fs.write`, and an `fs.read` with an unnamed extra argument
   are each denied with the failed step/constraint named in the response.
+  (The second and third of those three are blocked today; only the counter is
+  missing.)
 - Exit: T3/T4-style manual scenarios blocked; benign scripted workload runs with
   zero false positives; the two extension types written up against the §10.3.2
   template — as a *proposed* registration under the `invocation_constraints`
@@ -171,6 +204,17 @@ recoverable from the token chain.
 - Exit: 100% block on out-of-authority calls and on every I1–I6 violation attempt;
   FP rate and latency reported (target p99 < 1 ms on the stateless path at depth 3);
   numbers reproducible with one command (`go run ./eval`).
+
+**The depth-3 target is currently missed by about 2x.** M2a measured p99 ≈ 2.1 ms
+added at depth 3 with nothing optimized; a CPU profile puts ~44% in Ed25519
+verification and most of the rest in JSON parsing and JCS canonicalization, both
+linear in depth. Warden re-parses and re-canonicalizes every token on every
+request and a verified chain is immutable, so a verification cache is the obvious
+first move — deliberately not built in M2a, because it is a cache keyed by
+attacker-supplied bytes sitting in front of the authorization decision, and that
+needs designing rather than adding. Either the cache lands before M4 or the
+target is restated against measured evidence; it is not carried forward as an
+aspiration.
 
 ## M5 — Demo
 
