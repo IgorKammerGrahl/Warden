@@ -58,18 +58,43 @@ func (v *Verifier) now() int64 {
 	return time.Now().Unix()
 }
 
+// Report is what a verification run observed besides its decision. Nothing in
+// it is a reason to deny: §6 permits an enforcement point to log these, and a
+// caller that turns one into a refusal rejects chains the draft declares valid.
+//
+// A Report is returned on the error path too, carrying whatever was observed
+// before the denial. It is a record of the run, not of the permit.
+type Report struct {
+	// SameScope holds the chain indices of tokens whose derivation narrowed no
+	// authority dimension (§6, final paragraph). The index is the CHILD's
+	// position, so 1 is the first derivation and a root-only chain can never
+	// appear here. Empty when every link attenuated something.
+	SameScope []int
+}
+
 // Verify executes draft §7 steps 1 through 8 in order and returns nil only on
 // step 8, PERMIT. Any error is a DENY; the caller must not distinguish between
 // them to a remote peer.
+//
+// It is VerifyReport with the report dropped, for callers that only need the
+// decision.
+func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJWT string) error {
+	_, err := v.VerifyReport(chain, tool, args, popJWT)
+	return err
+}
+
+// VerifyReport is Verify, additionally reporting what the run observed. The
+// error is the authorization decision; the Report is never part of it.
 //
 // The ordering is normative, not incidental. §5.3: an enforcement point MUST
 // complete chain verification (steps 1-6) before evaluating the PoP JWT, and a
 // valid PoP against an invalid chain MUST NOT authorize. So the PoP is not
 // touched until step 7, after the chain has been accepted whole.
-func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJWT string) error {
+func (v *Verifier) VerifyReport(chain []string, tool string, args map[string]any, popJWT string) (Report, error) {
+	var rep Report
 	// Step 1.
 	if len(chain) == 0 {
-		return core.Deny("§7 step 1", "aat: empty chain")
+		return rep, core.Deny("§7 step 1", "aat: empty chain")
 	}
 	now := v.now()
 
@@ -77,16 +102,16 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	total := 0
 	for i, compact := range chain {
 		if err := checkSize(fmt.Sprintf("chain[%d]", i), len(compact)); err != nil {
-			return core.Deny("§7 step 2a, §4.3.1", "aat: %w", err)
+			return rep, core.Deny("§7 step 2a, §4.3.1", "aat: %w", err)
 		}
 		total += len(compact)
 	}
 	if MaxStackSize <= 0 {
-		return core.Deny("§4.3.1", "aat: MaxStackSize is %d; a finite positive limit is required",
+		return rep, core.Deny("§4.3.1", "aat: MaxStackSize is %d; a finite positive limit is required",
 			MaxStackSize)
 	}
 	if total > MaxStackSize {
-		return core.Deny("§7 step 2b", "aat: chain is %d bytes, exceeds MaxStackSize %d",
+		return rep, core.Deny("§7 step 2b", "aat: chain is %d bytes, exceeds MaxStackSize %d",
 			total, MaxStackSize)
 	}
 
@@ -98,10 +123,10 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	for i, compact := range chain {
 		jti, err := extractJTI(compact)
 		if err != nil {
-			return core.Deny("§7 step 2c", "aat: chain[%d]: %w", i, err)
+			return rep, core.Deny("§7 step 2c", "aat: chain[%d]: %w", i, err)
 		}
 		if _, dup := seen[jti]; dup {
-			return core.Deny("§7 step 2c, cycle detection",
+			return rep, core.Deny("§7 step 2c, cycle detection",
 				"aat: jti %q appears more than once in the presented chain",
 				jti)
 		}
@@ -111,14 +136,14 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	// Step 3.
 	rootTok, err := v.verifyRoot(chain[0])
 	if err != nil {
-		return err
+		return rep, err
 	}
 	rootDom, err := project(rootTok)
 	if err != nil {
-		return fmt.Errorf("aat: root: %w", err) // project cites its own clause
+		return rep, fmt.Errorf("aat: root: %w", err) // project cites its own clause
 	}
 	if err := core.CheckRoot(rootDom, now, v.Limits); err != nil {
-		return err
+		return rep, err
 	}
 
 	// Step 4. Steps 3d (par_hash absent from the root), 4b1-4b5 and the
@@ -130,24 +155,31 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 		// that key is what step 4 does and why the loop cannot be reordered.
 		childTok, err := verifyThenParse(chain[i], parentTok.Claims.Confirmation.JWK)
 		if err != nil {
-			return core.Deny("§7 steps 4a-4b, I1", "aat: chain[%d]: %w", i, err)
+			return rep, core.Deny("§7 steps 4a-4b, I1", "aat: chain[%d]: %w", i, err)
 		}
 		// 4n, 4o.
 		childDom, err := project(childTok)
 		if err != nil {
-			return fmt.Errorf("aat: chain[%d]: %w", i, err)
+			return rep, fmt.Errorf("aat: chain[%d]: %w", i, err)
 		}
 		// 4c-4p.
 		if err := core.CheckLink(parentDom, childDom, now, v.Limits); err != nil {
-			return fmt.Errorf("aat: chain[%d]: %w", i, err)
+			return rep, fmt.Errorf("aat: chain[%d]: %w", i, err)
 		}
 		// 4q (I5). par_hash commits the child to one parent token instance,
 		// which the signature and I1 together do not do when a holder key holds
 		// several compatible parents.
 		if want := ParentHash(parentTok); childTok.Claims.ParentHash != want {
-			return core.Deny("§7 step 4q, I5",
+			return rep, core.Deny("§7 step 4q, I5",
 				"aat: chain[%d] par_hash %q does not match SHA-256 of the parent signing input %q",
 				i, childTok.Claims.ParentHash, want)
+		}
+		// §6, final paragraph. A derivation that narrows nothing is valid and
+		// merely consumes a delegation depth; the draft permits logging it as
+		// anomalous. Recorded after the link has passed, never instead of
+		// passing it — this is an observation, not a check.
+		if core.SameScope(childDom, parentDom) {
+			rep.SameScope = append(rep.SameScope, i)
 		}
 		parentTok, parentDom = childTok, childDom
 	}
@@ -155,27 +187,27 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	// Step 5.
 	leafTok, leafDom := parentTok, parentDom
 	if len(chain) != leafDom.Depth+1 {
-		return core.Deny("§7 step 5", "aat: chain has %d tokens, leaf del_depth is %d",
+		return rep, core.Deny("§7 step 5", "aat: chain has %d tokens, leaf del_depth is %d",
 			len(chain), leafDom.Depth)
 	}
 
 	// Step 6a.
 	if leafDom.Caps == nil {
-		return core.Deny("§7 step 6a",
+		return rep, core.Deny("§7 step 6a",
 			"aat: leaf carries no %q entry; §3.3 requires exactly one in a leaf token",
 			core.CapabilityType)
 	}
 	// Step 6b.
 	if err := leafDom.Caps.CheckInvocation(tool, args); err != nil {
-		return err
+		return rep, err
 	}
 
 	// Step 7. Chain verification is complete; only now is the PoP looked at.
 	if err := v.verifyPoP(popJWT, leafTok, tool, args, now); err != nil {
-		return err
+		return rep, err
 	}
 
-	return nil // Step 8. PERMIT.
+	return rep, nil // Step 8. PERMIT.
 }
 
 // verifyRoot is §7 steps 3a and 3b: the root verifies under some trust anchor,
@@ -227,22 +259,27 @@ func verifyThenParse(compact string, key *JWK) (*Token, error) {
 // project maps a verified token onto the domain. The thumbprint URI is computed
 // here rather than in core because only this layer knows what a JWK is; §3.3
 // parsing and MAX_CONSTRAINT_DEPTH (steps 3n, 4o) come from core.
-func project(t *Token) (*core.Token, error) {
-	uri, err := t.Claims.Confirmation.JWK.ThumbprintURI()
+func project(t *Token) (*core.Token, error) { return projectClaims(t.Claims) }
+
+// projectClaims is project over claims that are not (yet) a signed token. Derive
+// needs it: the child it is about to mint must be checked against the parent
+// before it is signed, and until it is signed there is no Token to project.
+func projectClaims(t Claims) (*core.Token, error) {
+	uri, err := t.Confirmation.JWK.ThumbprintURI()
 	if err != nil {
 		return nil, core.Deny("§7 steps 3l, 4b2", "aat: cnf.jwk: %w", err)
 	}
-	caps, err := core.ParseCapabilities(t.Claims.AuthorizationDetails)
+	caps, err := core.ParseCapabilities(t.AuthorizationDetails)
 	if err != nil {
 		return nil, err
 	}
 	return &core.Token{
-		JTI:          t.Claims.JTI,
-		Issuer:       t.Claims.Issuer,
-		IssuedAt:     t.Claims.IssuedAt,
-		Expires:      t.Claims.Expires,
-		Depth:        t.Claims.DelegationDepth,
-		MaxDepth:     t.Claims.MaxDelegationDepth,
+		JTI:          t.JTI,
+		Issuer:       t.Issuer,
+		IssuedAt:     t.IssuedAt,
+		Expires:      t.Expires,
+		Depth:        t.DelegationDepth,
+		MaxDepth:     t.MaxDelegationDepth,
 		HolderKeyURI: uri,
 		Caps:         caps,
 	}, nil
