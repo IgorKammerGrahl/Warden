@@ -1,9 +1,15 @@
 // Command wardend fronts one upstream MCP server over stdio.
 //
-// M1 is passthrough: every message is relayed unchanged and nothing is denied.
 // wardend spawns the upstream server as a subprocess, relays JSON-RPC between
 // the client on its own stdin/stdout and the server's, and writes one audit
 // record per tools/call.
+//
+// By default it enforces: every tools/call runs the ARCHITECTURE §3.2 pipeline
+// against the AAT chain in its _meta binding, and a call that does not verify is
+// answered with a JSON-RPC error and never reaches the upstream. -passthrough-only
+// relays without deciding; it exists to re-measure the unenforced control on a
+// binary that has enforcement compiled in, and it is not a mode to serve traffic
+// in.
 //
 // stdout carries protocol bytes only. Every diagnostic, the upstream's own
 // stderr, and the closing latency report all go to stderr; the audit log goes
@@ -17,6 +23,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,7 +32,9 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/igorkg/warden/internal/aat"
 	"github.com/igorkg/warden/internal/audit"
+	"github.com/igorkg/warden/internal/core"
 	"github.com/igorkg/warden/internal/proxy"
 )
 
@@ -39,12 +49,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("wardend", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	auditPath := fs.String("audit", "wardend-audit.jsonl", "audit log path (JSONL); \"-\" writes to stderr")
-	// Redundant in M1, which has no enforcement to turn off, and load-bearing
-	// in M2: it is what lets M1's latency baseline be re-measured on a binary
-	// that has enforcement compiled in. Without it the control is a number
-	// from a binary that no longer exists. Proxy.Run refuses to start unless
-	// it is set, so the flag cannot quietly mean nothing.
-	passthroughOnly := fs.Bool("passthrough-only", true, "relay every message and deny nothing (M1: required)")
+	// The unenforced control measurement, and the only reason the enforcement
+	// overhead figure means anything: it is the same binary, measured twice.
+	// It defaults off because a guardrail whose default is "guard nothing" is
+	// one flag away from being nothing in production too.
+	passthroughOnly := fs.Bool("passthrough-only", false,
+		"relay every message and deny nothing; the unenforced control measurement, not a mode to serve traffic in")
+	anchorsPath := fs.String("trust-anchors", "",
+		"path to a JSON array of trust-anchor JWKs; required unless -passthrough-only")
+	audience := fs.String("audience", "",
+		"require every PoP to carry a matching aat_aud (§7 step 7d); empty means this deployment does not require audience binding")
+	maxDepth := fs.Int("max-delegation-depth", 8,
+		"the deployment's MAX_DELEGATION_DEPTH (§4.3); the draft recommends no value, topology decides")
 	stats := fs.Bool("stats", true, "print the latency distributions to stderr on exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -53,6 +69,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(cmdline) == 0 {
 		fs.Usage()
 		return fmt.Errorf("no upstream server command given")
+	}
+
+	// Built before the audit file is opened and before the upstream is
+	// spawned, so a misconfigured enforcing wardend fails without leaving a
+	// subprocess behind or a log file that records nothing.
+	enforcer, err := buildEnforcer(*passthroughOnly, *anchorsPath, *audience, *maxDepth)
+	if err != nil {
+		return err
 	}
 
 	logger := log.New(stderr, "wardend: ", log.LstdFlags|log.Lmicroseconds)
@@ -90,6 +114,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Audit:           aw,
 		Log:             logger,
 		PassthroughOnly: *passthroughOnly,
+		Enforce:         enforcer,
 	}
 	relayErr := p.Run()
 
@@ -107,6 +132,64 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		logger.Printf("upstream exited: %v", waitErr)
 	}
 	return nil
+}
+
+// buildEnforcer returns the §3.2 pipeline, or nil in passthrough.
+//
+// -trust-anchors is mandatory to enforce, and the failure is a refusal to start
+// rather than a warning. An enforcing wardend with an empty anchor set denies
+// every call, which looks from the outside exactly like a correctly configured
+// wardend facing a client with bad tokens — the operator would go debugging the
+// client. There is also no defensible default: a trust anchor is the deployment
+// naming who may issue authority, and guessing that is guessing the answer to
+// the only question the operator has to answer.
+func buildEnforcer(passthroughOnly bool, anchorsPath, audience string, maxDepth int) (*proxy.Enforcer, error) {
+	if passthroughOnly {
+		if anchorsPath != "" {
+			return nil, errors.New("-trust-anchors was given with -passthrough-only, " +
+				"which verifies nothing; drop one of the two rather than leaving it ambiguous " +
+				"which was meant")
+		}
+		return nil, nil
+	}
+	if anchorsPath == "" {
+		return nil, errors.New("-trust-anchors is required when enforcing: without it every " +
+			"chain fails at §7 step 3b and wardend would deny every call for a reason that " +
+			"looks like the client's fault (pass -passthrough-only to relay without deciding)")
+	}
+	anchors, err := loadAnchors(anchorsPath)
+	if err != nil {
+		return nil, err
+	}
+	return &proxy.Enforcer{
+		Verifier: &aat.Verifier{
+			TrustAnchors: anchors,
+			Limits: core.Limits{
+				MaxDelegationDepth: maxDepth,
+				MaxIATSkew:         30,             // §4.4 RECOMMENDED
+				MaxTokenLifetime:   90 * 24 * 3600, // §4.4 RECOMMENDED upper bound
+			},
+			PoPSkew:  aat.DefaultPoPSkew,
+			Audience: audience,
+		},
+	}, nil
+}
+
+// loadAnchors reads a JSON array of public JWKs.
+func loadAnchors(path string) ([]*aat.JWK, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read trust anchors: %w", err)
+	}
+	var anchors []*aat.JWK
+	if err := json.Unmarshal(data, &anchors); err != nil {
+		return nil, fmt.Errorf("parse trust anchors %s: %w (expected a JSON array of JWKs)", path, err)
+	}
+	if len(anchors) == 0 {
+		return nil, fmt.Errorf("trust anchors %s holds no keys; an enforcing wardend with no "+
+			"anchor denies every call", path)
+	}
+	return anchors, nil
 }
 
 // reportStats prints the three distributions and the convention behind them.
