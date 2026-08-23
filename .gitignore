@@ -28,3 +28,6 @@ internal/*/testdata/rapid/
 
 # Serena MCP workspace cache
 .serena/
+
+# wardend default audit log
+wardend-audit.jsonl
