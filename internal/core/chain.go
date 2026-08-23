@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 )
 
 // Token is the domain projection of an AAT whose signature has already been
@@ -175,4 +176,35 @@ func checkURI(s string) error {
 		return fmt.Errorf("%q is not an absolute URI", s)
 	}
 	return nil
+}
+
+// SameScope reports the §6 same-scope derivation: a link in which the child
+// narrowed no authority dimension — same tool set, same constraints, same
+// del_max_depth, same exp. It is not a validity question. §6's final paragraph
+// says such a derivation "is technically valid by the invariants above" and
+// merely consumes a delegation depth, and permits an enforcement point to log
+// it as anomalous.
+//
+// Callers MUST NOT turn a true here into a denial. Refusing it would reject a
+// derivation the draft explicitly allows, which is a conformance failure rather
+// than a hardening measure.
+//
+// The comparison is structural, over the parsed constraint trees. Two
+// constraints denoting the same value set but spelled differently — one_of
+// ["a"] against exact "a" — read as narrowed, so this errs toward NOT flagging.
+// That is the right direction for an anomaly signal: a false flag costs an
+// operator an investigation, a missed one costs nothing, because no invariant
+// was relying on the answer.
+func SameScope(child, parent *Token) bool {
+	if child.MaxDepth != parent.MaxDepth || child.Expires != parent.Expires {
+		return false
+	}
+	var ct, pt map[string]ConstraintMap
+	if child.Caps != nil {
+		ct = child.Caps.Tools
+	}
+	if parent.Caps != nil {
+		pt = parent.Caps.Tools
+	}
+	return reflect.DeepEqual(ct, pt)
 }
