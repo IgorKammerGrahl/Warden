@@ -109,15 +109,7 @@ func newAt(t testing.TB, depth int, now int64) *Fixture {
 		t.Fatalf("aattest.New(%d): a chain has at least a root", depth)
 	}
 
-	privs := make([]ed25519.PrivateKey, depth)
-	pubs := make([]ed25519.PublicKey, depth)
-	for i := range privs {
-		pub, priv, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			t.Fatalf("GenerateKey: %v", err)
-		}
-		privs[i], pubs[i] = priv, pub
-	}
+	privs, pubs := keys(t, depth)
 
 	f := &Fixture{
 		Anchor:     aat.NewJWK(pubs[0]),
@@ -129,7 +121,7 @@ func newAt(t testing.TB, depth int, now int64) *Fixture {
 	var parent *aat.Token
 	for i := 0; i < depth; i++ {
 		c := aat.Claims{
-			JTI: fmt.Sprintf("01957a41-0081-7c20-bf3a-00a0c91e%04d", i+1),
+			JTI: jti(i),
 			// exp and iat only narrow as the chain descends (I3).
 			IssuedAt:             now - 100 + int64(i)*10,
 			Expires:              now + 3600 - int64(i)*10,
@@ -156,6 +148,106 @@ func newAt(t testing.TB, depth int, now int64) *Fixture {
 		parent = tok
 	}
 	return f
+}
+
+// Derived is New built through aat.Deriver: the same shape, produced the way §6
+// says a holder produces one. A test using it exercises warden's own output
+// rather than a fixture's idea of what a derived token looks like.
+//
+// The chain narrows at the first link only. From the second derivation down,
+// each child carries its parent's tools, exp and del_max_depth unchanged, which
+// is §6's same-scope derivation — valid, and spending a delegation depth to buy
+// nothing. So Derived(t, 2) has no same-scope link and Derived(t, 3) has exactly
+// one, at position 2, which is how a test picks between the two cases without a
+// second constructor.
+func Derived(t testing.TB, depth int) *Fixture { return newDerived(t, depth, Now) }
+
+// DerivedLive is Derived against the wall clock, for tests that drive a wardend
+// with no injected clock. See NewLive for why that is a last resort.
+func DerivedLive(t testing.TB, depth int) *Fixture {
+	return newDerived(t, depth, time.Now().Unix())
+}
+
+func newDerived(t testing.TB, depth int, now int64) *Fixture {
+	t.Helper()
+	if depth < 1 {
+		t.Fatalf("aattest.Derived(%d): a chain has at least a root", depth)
+	}
+	privs, pubs := keys(t, depth)
+	f := &Fixture{
+		Anchor:     aat.NewJWK(pubs[0]),
+		leafHolder: privs[depth-1],
+		Chain:      make([]string, depth),
+		now:        now,
+	}
+
+	// The root is minted, not derived: §6 derives from a parent and a root has
+	// none. This is the one token in the chain a holder cannot produce.
+	parent, err := aat.Mint(aat.Claims{
+		JTI:                  jti(0),
+		Issuer:               RootIssuer,
+		IssuedAt:             now - 100,
+		Expires:              now + 3600,
+		Confirmation:         aat.Confirmation{JWK: aat.NewJWK(pubs[0])},
+		DelegationDepth:      0,
+		MaxDelegationDepth:   depth - 1,
+		AuthorizationDetails: details(rootTools),
+	}, privs[0])
+	if err != nil {
+		t.Fatalf("Mint root: %v", err)
+	}
+	f.Chain[0], f.leafJTI = parent.Compact(), jti(0)
+
+	dv := &aat.Deriver{Limits: core.DefaultLimits, Now: func() int64 { return now }}
+	for i := 1; i < depth; i++ {
+		d := aat.Derivation{
+			JTI:                jti(i),
+			IssuedAt:           parent.Claims.IssuedAt,
+			Expires:            parent.Claims.Expires,
+			HolderKey:          aat.NewJWK(pubs[i]),
+			MaxDelegationDepth: depth - 1,
+			Tools:              toolsMap(t, delegateTools),
+		}
+		if i == 1 {
+			// The narrowing link: rootTools down to delegateTools, and a
+			// shorter exp. Everything below it repeats this child verbatim.
+			d.IssuedAt, d.Expires = now-90, now+3590
+		}
+		child, err := dv.Derive(parent, privs[i-1], d) // the parent HOLDER signs (I1)
+		if err != nil {
+			t.Fatalf("Derive token %d of %d: %v", i, depth, err)
+		}
+		f.Chain[i], f.leafJTI = child.Compact(), d.JTI
+		parent = child
+	}
+	return f
+}
+
+func keys(t testing.TB, depth int) ([]ed25519.PrivateKey, []ed25519.PublicKey) {
+	t.Helper()
+	privs := make([]ed25519.PrivateKey, depth)
+	pubs := make([]ed25519.PublicKey, depth)
+	for i := range privs {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		privs[i], pubs[i] = priv, pub
+	}
+	return privs, pubs
+}
+
+func jti(i int) string { return fmt.Sprintf("01957a41-0081-7c20-bf3a-00a0c91e%04d", i+1) }
+
+// toolsMap reparses a tools literal into the per-tool form Derivation takes, so
+// New and Derived authorize exactly the same capabilities from one source.
+func toolsMap(t testing.TB, tools string) map[string]json.RawMessage {
+	t.Helper()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(tools), &m); err != nil {
+		t.Fatalf("toolsMap: %v", err)
+	}
+	return m
 }
 
 // Verifier accepts this fixture's anchor and runs at the fixed clock.

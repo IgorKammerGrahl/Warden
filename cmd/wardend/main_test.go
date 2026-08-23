@@ -389,6 +389,87 @@ func TestEnforcingE2EPermits(t *testing.T) {
 	}
 }
 
+// TestDerivedChainE2EPermits is M3's exit criterion, and the only test in the
+// tree where warden's output is fed back into warden's input: a root minted
+// here, derived twice through aat.Deriver, presented over the wire to a real
+// wardend in front of a real upstream.
+//
+// aattest.Derived's second derivation narrows nothing, so this asserts the
+// §6 same-scope handling at the same time: PERMIT, with the anomaly recorded
+// on the chain rather than as a third value of Decision.
+func TestDerivedChainE2EPermits(t *testing.T) {
+	f := aattest.DerivedLive(t, 3)
+	p := enforcingServer(t, f)
+	converse(t, p.c)
+
+	got := p.c.call(t, boundCall(t, f, 10, aattest.Echo, aattest.EchoAllowed))
+	if !strings.Contains(got, "echo: hello") {
+		t.Fatalf("response = %s, want the upstream's echo", got)
+	}
+	p.closeIn()
+	p.wait(t)
+
+	var permits int
+	for _, r := range readAudit(t, p.auditLog) {
+		if r.Decision != audit.DecisionPermit {
+			continue
+		}
+		permits++
+		if r.Chain.Depth == nil || *r.Chain.Depth != 2 || r.Chain.Tokens != 3 {
+			t.Errorf("permit record does not describe the derived chain: %+v", r.Chain)
+		}
+		if len(r.Chain.SameScope) != 1 || r.Chain.SameScope[0] != 2 {
+			t.Errorf("chain.same_scope = %v, want [2]: the second derivation narrows nothing",
+				r.Chain.SameScope)
+		}
+	}
+	if permits != 1 {
+		t.Fatalf("want exactly one permit, got %d", permits)
+	}
+}
+
+// §4.4's MAX_TOKEN_LIFETIME is the whole of what §8.9 offers against a stolen
+// token, so the flag has to actually reach the verifier rather than sit next to
+// a hardcoded default.
+func TestMaxTokenLifetimeFlagReachesTheVerifier(t *testing.T) {
+	anchors := t.TempDir() + "/anchors.json"
+	b, err := json.Marshal([]*aat.JWK{aattest.New(t, 1).Anchor})
+	if err != nil {
+		t.Fatalf("marshal anchors: %v", err)
+	}
+	if err := os.WriteFile(anchors, b, 0o600); err != nil {
+		t.Fatalf("write anchors: %v", err)
+	}
+	e, err := buildEnforcer(false, anchors, "", 8, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("buildEnforcer: %v", err)
+	}
+	if got := e.Verifier.Limits.MaxTokenLifetime; got != 900 {
+		t.Errorf("MaxTokenLifetime = %d seconds, want 900", got)
+	}
+
+	// "Unlimited" is not one of the values §4.4 offers.
+	if _, err := buildEnforcer(false, anchors, "", 8, 0); err == nil {
+		t.Error("buildEnforcer accepted -max-token-lifetime 0")
+	}
+}
+
+// A narrowing-only chain must NOT be flagged, or the signal is noise.
+func TestDerivedNarrowingChainIsNotFlagged(t *testing.T) {
+	f := aattest.DerivedLive(t, 2)
+	p := enforcingServer(t, f)
+	converse(t, p.c)
+	p.c.call(t, boundCall(t, f, 10, aattest.Echo, aattest.EchoAllowed))
+	p.closeIn()
+	p.wait(t)
+
+	for _, r := range readAudit(t, p.auditLog) {
+		if r.Decision == audit.DecisionPermit && len(r.Chain.SameScope) != 0 {
+			t.Errorf("chain.same_scope = %v on a chain whose only link narrows", r.Chain.SameScope)
+		}
+	}
+}
+
 // TestEnforcingE2EDenies is the other half: an out-of-authority call, an error
 // the client can parse, an upstream that never saw it, and an audit trace that
 // names the clause.
