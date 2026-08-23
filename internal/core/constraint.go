@@ -127,7 +127,7 @@ func ParseConstraint(raw []byte) (*Constraint, error) {
 
 func parseConstraint(raw []byte, depth int) (*Constraint, error) {
 	if depth <= 0 {
-		return nil, fmt.Errorf("constraint: tree deeper than MAX_CONSTRAINT_DEPTH (%d)", MaxConstraintDepth)
+		return nil, Deny("§3.4 MAX_CONSTRAINT_DEPTH", "constraint: tree deeper than MAX_CONSTRAINT_DEPTH (%d)", MaxConstraintDepth)
 	}
 
 	var obj map[string]json.RawMessage
@@ -148,7 +148,11 @@ func parseConstraint(raw []byte, depth int) (*Constraint, error) {
 	}
 	allowed, known := members[typ]
 	if !known {
-		return nil, fmt.Errorf("constraint: unrecognized constraint_type %q", typ)
+		// §3.5.2: an enforcement point that meets a constraint type it has no
+		// registered procedure for MUST reject the chain. Not skip the
+		// constraint — the type is a restriction the issuer intended, and
+		// omitting it silently is precisely what breaks attenuation.
+		return nil, Deny("§3.5.2", "constraint: unrecognized constraint_type %q", typ)
 	}
 	for name := range obj {
 		if name == "constraint_type" || slices.Contains(allowed, name) {

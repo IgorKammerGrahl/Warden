@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
@@ -65,13 +64,13 @@ func ParseCapabilities(details []json.RawMessage) (*Capabilities, error) {
 			continue // §3.3: entries of other types MUST be ignored.
 		}
 		if found != nil {
-			return nil, fmt.Errorf(
-				"core: authorization_details carries more than one %q entry (§3.3: invalid)",
+			return nil, Deny("§3.3",
+				"core: authorization_details carries more than one %q entry; invalid",
 				CapabilityType)
 		}
 		if entry.Tools == nil {
-			return nil, fmt.Errorf(
-				"core: %q entry has no tools member (§3.3: MUST include one)", CapabilityType)
+			return nil, Deny("§3.3",
+				"core: %q entry has no tools member; MUST include one", CapabilityType)
 		}
 		caps := &Capabilities{Tools: make(map[string]ConstraintMap, len(entry.Tools))}
 		for tool, rawMap := range entry.Tools {
@@ -94,7 +93,7 @@ func parseConstraintMap(raw json.RawMessage) (ConstraintMap, error) {
 	// null is not {}: an absent map would read as open-world, which is the more
 	// permissive reading of a malformed token.
 	if obj == nil {
-		return nil, errors.New("constraint map is null")
+		return nil, Deny("§3.3", "constraint map is null")
 	}
 	cm := make(ConstraintMap, len(obj))
 	for arg, rawConstraint := range obj {
@@ -128,8 +127,8 @@ func CheckI4(child, parent *Capabilities) error {
 	for tool, childMap := range child.tools() {
 		parentMap, ok := parentTools[tool]
 		if !ok {
-			return fmt.Errorf(
-				"core: child authorizes tool %q that the parent does not (§7 step 4p1, I4)", tool)
+			return Deny("§7 step 4p1, I4",
+				"core: child authorizes tool %q that the parent does not", tool)
 		}
 
 		// p2 and p3 are two different rules, not one subset check. p2 (parent
@@ -142,16 +141,16 @@ func CheckI4(child, parent *Capabilities) error {
 		// unrestricted one.
 		if len(parentMap) > 0 {
 			if len(childMap) != len(parentMap) {
-				return fmt.Errorf(
+				return Deny("§7 step 4p2, I4",
 					"core: tool %q: child constraint map has %d argument keys, parent has %d; "+
-						"a non-empty parent map requires exactly the same key set (§7 step 4p2, I4)",
+						"a non-empty parent map requires exactly the same key set",
 					tool, len(childMap), len(parentMap))
 			}
 			for arg := range parentMap {
 				if _, ok := childMap[arg]; !ok {
-					return fmt.Errorf(
-						"core: tool %q: child constraint map drops the parent's argument key %q "+
-							"(§7 step 4p2, I4)", tool, arg)
+					return Deny("§7 step 4p2, I4",
+						"core: tool %q: child constraint map drops the parent's argument key %q",
+						tool, arg)
 				}
 			}
 		}
@@ -160,9 +159,9 @@ func CheckI4(child, parent *Capabilities) error {
 		// too; when p2 applied the key sets are equal and every lookup hits.
 		for arg, parentConstraint := range parentMap {
 			if !Subsumes(childMap[arg], parentConstraint) {
-				return fmt.Errorf(
-					"core: tool %q argument %q: child constraint does not subsume the parent's "+
-						"(§4.5, §7 step 4p4, I4)", tool, arg)
+				return Deny("§4.5, §7 step 4p4, I4",
+					"core: tool %q argument %q: child constraint does not subsume the parent's",
+					tool, arg)
 			}
 		}
 	}
@@ -180,28 +179,33 @@ func CheckI4(child, parent *Capabilities) error {
 func (c *Capabilities) CheckInvocation(tool string, args map[string]any) error {
 	cm, ok := c.tools()[tool]
 	if !ok {
-		return fmt.Errorf("core: tool %q is not authorized (§7 step 6b)", tool)
+		return Deny("§7 step 6b", "core: tool %q is not authorized", tool)
 	}
 	if len(cm) == 0 {
 		return nil // §3.3: an empty constraint map is open-world.
 	}
 	for name := range args {
 		if _, ok := cm[name]; !ok {
-			return fmt.Errorf(
-				"core: tool %q: argument %q is not named in the constraint map (§3.3 closed-world)",
+			return Deny("§7 step 6b, §3.3 closed-world",
+				"core: tool %q: argument %q is not named in the constraint map",
 				tool, name)
 		}
 	}
 	for name, constraint := range cm {
 		v, ok := args[name]
 		if !ok {
-			return fmt.Errorf(
-				"core: tool %q: constrained argument %q is absent from the invocation (§3.3)",
+			return Deny("§7 step 6b, §3.3 closed-world",
+				"core: tool %q: constrained argument %q is absent from the invocation",
 				tool, name)
 		}
 		if !constraint.Check(v) {
-			return fmt.Errorf(
-				"core: tool %q: argument %q does not satisfy its constraint (§3.4)", tool, name)
+			// The ref names the constraint type because §6 wants the audit
+			// trace to say which clause of §3.4 fired. Interpolating it is
+			// safe in a way interpolating a tool name would not be:
+			// ParseConstraint rejects any type outside Table 2, so this is a
+			// validated enum, not attacker-chosen text.
+			return Deny("§3.4 "+constraint.Type,
+				"core: tool %q: argument %q does not satisfy its constraint", tool, name)
 		}
 	}
 	return nil

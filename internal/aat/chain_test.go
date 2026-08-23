@@ -197,6 +197,14 @@ func denies(t *testing.T, f *chainFixture, tool string, args map[string]any, wan
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("Verify error = %v, want one mentioning %q", err, want)
 	}
+	// Every DENY must be attributable. ARCHITECTURE §6 makes the citation the
+	// substance of the audit trace, so a denial that cannot name the clause it
+	// fired on is a bug in the check, not a gap in the log format — and this
+	// helper runs on every I1-I6 denial in the file, which is what keeps a
+	// newly added check from arriving uncited.
+	if ref := core.RefOf(err); ref == "" {
+		t.Errorf("Verify error = %v carries no core.Denial; the trace would have no ref", err)
+	}
 }
 
 // I1: delegation authority. Two ways to break it, and both must DENY: the

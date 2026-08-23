@@ -69,7 +69,7 @@ func (v *Verifier) now() int64 {
 func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJWT string) error {
 	// Step 1.
 	if len(chain) == 0 {
-		return errors.New("aat: empty chain (§7 step 1)")
+		return core.Deny("§7 step 1", "aat: empty chain")
 	}
 	now := v.now()
 
@@ -77,16 +77,16 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	total := 0
 	for i, compact := range chain {
 		if err := checkSize(fmt.Sprintf("chain[%d]", i), len(compact)); err != nil {
-			return err
+			return core.Deny("§7 step 2a, §4.3.1", "aat: %w", err)
 		}
 		total += len(compact)
 	}
 	if MaxStackSize <= 0 {
-		return fmt.Errorf("aat: MaxStackSize is %d; §4.3.1 requires a finite positive limit",
+		return core.Deny("§4.3.1", "aat: MaxStackSize is %d; a finite positive limit is required",
 			MaxStackSize)
 	}
 	if total > MaxStackSize {
-		return fmt.Errorf("aat: chain is %d bytes, exceeds MaxStackSize %d (§7 step 2b)",
+		return core.Deny("§7 step 2b", "aat: chain is %d bytes, exceeds MaxStackSize %d",
 			total, MaxStackSize)
 	}
 
@@ -98,11 +98,11 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	for i, compact := range chain {
 		jti, err := extractJTI(compact)
 		if err != nil {
-			return fmt.Errorf("aat: chain[%d] (§7 step 2c): %w", i, err)
+			return core.Deny("§7 step 2c", "aat: chain[%d]: %w", i, err)
 		}
 		if _, dup := seen[jti]; dup {
-			return fmt.Errorf(
-				"aat: jti %q appears more than once in the presented chain (§7 step 2c, cycle detection)",
+			return core.Deny("§7 step 2c, cycle detection",
+				"aat: jti %q appears more than once in the presented chain",
 				jti)
 		}
 		seen[jti] = struct{}{}
@@ -115,7 +115,7 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	}
 	rootDom, err := project(rootTok)
 	if err != nil {
-		return fmt.Errorf("aat: root: %w", err)
+		return fmt.Errorf("aat: root: %w", err) // project cites its own clause
 	}
 	if err := core.CheckRoot(rootDom, now, v.Limits); err != nil {
 		return err
@@ -130,7 +130,7 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 		// that key is what step 4 does and why the loop cannot be reordered.
 		childTok, err := verifyThenParse(chain[i], parentTok.Claims.Confirmation.JWK)
 		if err != nil {
-			return fmt.Errorf("aat: chain[%d] (§7 steps 4a-4b, I1): %w", i, err)
+			return core.Deny("§7 steps 4a-4b, I1", "aat: chain[%d]: %w", i, err)
 		}
 		// 4n, 4o.
 		childDom, err := project(childTok)
@@ -145,8 +145,8 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 		// which the signature and I1 together do not do when a holder key holds
 		// several compatible parents.
 		if want := ParentHash(parentTok); childTok.Claims.ParentHash != want {
-			return fmt.Errorf(
-				"aat: chain[%d] par_hash %q does not match SHA-256 of the parent signing input %q (§7 step 4q, I5)",
+			return core.Deny("§7 step 4q, I5",
+				"aat: chain[%d] par_hash %q does not match SHA-256 of the parent signing input %q",
 				i, childTok.Claims.ParentHash, want)
 		}
 		parentTok, parentDom = childTok, childDom
@@ -155,14 +155,14 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 	// Step 5.
 	leafTok, leafDom := parentTok, parentDom
 	if len(chain) != leafDom.Depth+1 {
-		return fmt.Errorf("aat: chain has %d tokens, leaf del_depth is %d (§7 step 5)",
+		return core.Deny("§7 step 5", "aat: chain has %d tokens, leaf del_depth is %d",
 			len(chain), leafDom.Depth)
 	}
 
 	// Step 6a.
 	if leafDom.Caps == nil {
-		return fmt.Errorf(
-			"aat: leaf carries no %q entry; §3.3 requires exactly one in a leaf token (§7 step 6a)",
+		return core.Deny("§7 step 6a",
+			"aat: leaf carries no %q entry; §3.3 requires exactly one in a leaf token",
 			core.CapabilityType)
 	}
 	// Step 6b.
@@ -182,7 +182,7 @@ func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJ
 // with the algorithm/key consistency check applied per candidate key.
 func (v *Verifier) verifyRoot(compact string) (*Token, error) {
 	if len(v.TrustAnchors) == 0 {
-		return nil, errors.New("aat: no trust anchors configured (§7 step 3b)")
+		return nil, core.Deny("§7 step 3b", "aat: no trust anchors configured")
 	}
 	var last error
 	for _, anchor := range v.TrustAnchors {
@@ -192,7 +192,7 @@ func (v *Verifier) verifyRoot(compact string) (*Token, error) {
 		}
 		last = err
 	}
-	return nil, fmt.Errorf("aat: root verifies under no trust anchor (§7 steps 3a-3b): %w", last)
+	return nil, core.Deny("§7 steps 3a-3b, I1", "aat: root verifies under no trust anchor: %w", last)
 }
 
 // verifyThenParse enforces §7's ordering for one token: signature first, claims
@@ -230,7 +230,7 @@ func verifyThenParse(compact string, key *JWK) (*Token, error) {
 func project(t *Token) (*core.Token, error) {
 	uri, err := t.Claims.Confirmation.JWK.ThumbprintURI()
 	if err != nil {
-		return nil, err
+		return nil, core.Deny("§7 steps 3l, 4b2", "aat: cnf.jwk: %w", err)
 	}
 	caps, err := core.ParseCapabilities(t.Claims.AuthorizationDetails)
 	if err != nil {
@@ -253,21 +253,21 @@ func (v *Verifier) verifyPoP(compact string, leaf *Token, tool string, args map[
 	// 7a, 7b.
 	pop, err := verifyThenParsePoP(compact, leaf.Claims.Confirmation.JWK)
 	if err != nil {
-		return fmt.Errorf("aat: PoP (§7 steps 7a-7b, I6): %w", err)
+		return core.Deny("§7 steps 7a-7b, I6", "aat: PoP: %w", err)
 	}
 	// 7c. leaf.Claims.JTI comes from a verified token, not from step 2c.
 	if pop.Claims.TokenID != leaf.Claims.JTI {
-		return fmt.Errorf("aat: PoP aat_id %q is not the leaf jti %q (§7 step 7c)",
+		return core.Deny("§7 step 7c", "aat: PoP aat_id %q is not the leaf jti %q",
 			pop.Claims.TokenID, leaf.Claims.JTI)
 	}
 	// 7d. Audience binding is deployment policy; when required it is a MUST.
 	if v.Audience != "" && pop.Claims.Audience != v.Audience {
-		return fmt.Errorf("aat: PoP aat_aud %q does not identify this enforcement point %q (§7 step 7d)",
+		return core.Deny("§7 step 7d", "aat: PoP aat_aud %q does not identify this enforcement point %q",
 			pop.Claims.Audience, v.Audience)
 	}
 	// 7e. Exact string comparison, per §3.3.1: no normalization of any kind.
 	if pop.Claims.Tool != tool {
-		return fmt.Errorf("aat: PoP aat_tool %q is not the invoked tool %q (§7 step 7e, §3.3.1)",
+		return core.Deny("§7 step 7e, §3.3.1", "aat: PoP aat_tool %q is not the invoked tool %q",
 			pop.Claims.Tool, tool)
 	}
 	// 7f.
@@ -276,11 +276,12 @@ func (v *Verifier) verifyPoP(compact string, leaf *Token, tool string, args map[
 	}
 	// 7g.
 	if v.PoPSkew <= 0 {
-		return fmt.Errorf("aat: PoPSkew is %d; §5.3 requires a finite positive tolerance window",
+		return core.Deny("§5.3", "aat: PoPSkew is %d; a finite positive tolerance window is required",
 			v.PoPSkew)
 	}
 	if delta := pop.Claims.IssuedAt - now; delta > v.PoPSkew || delta < -v.PoPSkew {
-		return fmt.Errorf("aat: PoP iat %d is %ds from now %d, outside the ±%ds tolerance (§7 step 7g, §5.3)",
+		return core.Deny("§7 step 7g, §5.3",
+			"aat: PoP iat %d is %ds from now %d, outside the ±%ds tolerance",
 			pop.Claims.IssuedAt, delta, now, v.PoPSkew)
 	}
 	return nil
@@ -316,15 +317,15 @@ func verifyThenParsePoP(compact string, key *JWK) (*PoP, error) {
 func sameCanonicalArgs(pop *PoP, args map[string]any) error {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(pop.Payload(), &payload); err != nil {
-		return fmt.Errorf("aat: PoP payload: %w", err)
+		return core.Deny("§7 step 7f", "aat: PoP payload: %w", err)
 	}
 	hta, ok := payload["hta"]
 	if !ok {
-		return errors.New("aat: PoP has no hta member (§5.2 Table 4)")
+		return core.Deny("§5.2 Table 4", "aat: PoP has no hta member")
 	}
 	htaCanonical, err := jcs.Canonicalize(hta)
 	if err != nil {
-		return fmt.Errorf("aat: canonicalize PoP hta (§7 step 7f): %w", err)
+		return core.Deny("§7 step 7f", "aat: canonicalize PoP hta: %w", err)
 	}
 
 	if args == nil {
@@ -332,15 +333,15 @@ func sameCanonicalArgs(pop *PoP, args map[string]any) error {
 	}
 	raw, err := json.Marshal(args)
 	if err != nil {
-		return fmt.Errorf("aat: marshal invocation args (§7 step 7f): %w", err)
+		return core.Deny("§7 step 7f", "aat: marshal invocation args: %w", err)
 	}
 	argsCanonical, err := jcs.Canonicalize(raw)
 	if err != nil {
-		return fmt.Errorf("aat: canonicalize invocation args (§7 step 7f): %w", err)
+		return core.Deny("§7 step 7f", "aat: canonicalize invocation args: %w", err)
 	}
 
 	if !bytes.Equal(htaCanonical, argsCanonical) {
-		return fmt.Errorf("aat: PoP hta does not match the invocation arguments (§7 step 7f): "+
+		return core.Deny("§7 step 7f", "aat: PoP hta does not match the invocation arguments: "+
 			"hta canonicalizes to %s, args to %s", htaCanonical, argsCanonical)
 	}
 	return nil

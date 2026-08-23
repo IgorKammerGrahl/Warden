@@ -48,11 +48,11 @@ var DefaultLimits = Limits{
 func (l Limits) check() error {
 	switch {
 	case l.MaxDelegationDepth < 0:
-		return fmt.Errorf("core: MaxDelegationDepth is %d, want non-negative (§4.3)", l.MaxDelegationDepth)
+		return Deny("§4.3", "core: MaxDelegationDepth is %d, want non-negative", l.MaxDelegationDepth)
 	case l.MaxIATSkew < 0:
-		return fmt.Errorf("core: MaxIATSkew is %d, want a finite non-negative bound (§4.4)", l.MaxIATSkew)
+		return Deny("§4.4", "core: MaxIATSkew is %d, want a finite non-negative bound", l.MaxIATSkew)
 	case l.MaxTokenLifetime <= 0:
-		return fmt.Errorf("core: MaxTokenLifetime is %d, want a finite positive bound (§4.4)", l.MaxTokenLifetime)
+		return Deny("§4.4", "core: MaxTokenLifetime is %d, want a finite positive bound", l.MaxTokenLifetime)
 	}
 	return nil
 }
@@ -68,36 +68,36 @@ func CheckRoot(root *Token, now int64, lim Limits) error {
 		return err
 	}
 	if root.Depth != 0 { // 3c
-		return fmt.Errorf("core: root del_depth is %d, want 0 (§7 step 3c)", root.Depth)
+		return Deny("§7 step 3c", "core: root del_depth is %d, want 0", root.Depth)
 	}
 	if root.Expires <= now { // 3e
-		return fmt.Errorf("core: root exp %d is not after now %d (§7 step 3e, I3)", root.Expires, now)
+		return Deny("§7 step 3e, I3", "core: root exp %d is not after now %d", root.Expires, now)
 	}
 	if root.IssuedAt > now+lim.MaxIATSkew { // 3f
-		return fmt.Errorf("core: root iat %d exceeds now %d plus MaxIATSkew %d (§7 step 3f, I3)",
+		return Deny("§7 step 3f, I3", "core: root iat %d exceeds now %d plus MaxIATSkew %d",
 			root.IssuedAt, now, lim.MaxIATSkew)
 	}
 	if root.Expires <= root.IssuedAt { // 3g
-		return fmt.Errorf("core: root exp %d is not after iat %d (§7 step 3g, I3)",
+		return Deny("§7 step 3g, I3", "core: root exp %d is not after iat %d",
 			root.Expires, root.IssuedAt)
 	}
 	if root.Expires > root.IssuedAt+lim.MaxTokenLifetime { // 3h
-		return fmt.Errorf("core: root lifetime %ds exceeds MaxTokenLifetime %ds (§7 step 3h, I3)",
+		return Deny("§7 step 3h, I3", "core: root lifetime %ds exceeds MaxTokenLifetime %ds",
 			root.Expires-root.IssuedAt, lim.MaxTokenLifetime)
 	}
 	if root.MaxDepth < 0 || root.MaxDepth > lim.MaxDelegationDepth { // 3i
-		return fmt.Errorf("core: root del_max_depth %d is outside [0, MaxDelegationDepth %d] (§7 step 3i, I2)",
+		return Deny("§7 step 3i, I2", "core: root del_max_depth %d is outside [0, MaxDelegationDepth %d]",
 			root.MaxDepth, lim.MaxDelegationDepth)
 	}
 	if root.JTI == "" { // 3j
-		return fmt.Errorf("core: root jti is empty (§7 step 3j)")
+		return Deny("§7 step 3j", "core: root jti is empty")
 	}
 	if err := checkURI(root.Issuer); err != nil { // 3k
-		return fmt.Errorf("core: root iss (§7 step 3k): %w", err)
+		return Deny("§7 step 3k", "core: root iss: %w", err)
 	}
 	if root.Caps == nil { // 3m
-		return fmt.Errorf(
-			"core: root carries no %q entry; §3.3 requires exactly one in a root token (§7 step 3m)",
+		return Deny("§7 step 3m",
+			"core: root carries no %q entry; §3.3 requires exactly one in a root token",
 			CapabilityType)
 	}
 	return nil
@@ -116,47 +116,47 @@ func CheckLink(parent, child *Token, now int64, lim Limits) error {
 		return err
 	}
 	if child.Issuer != parent.HolderKeyURI { // 4c (I1)
-		return fmt.Errorf(
-			"core: child iss %q is not the thumbprint URI of the parent holder key %q (§7 step 4c, I1)",
+		return Deny("§7 step 4c, I1",
+			"core: child iss %q is not the thumbprint URI of the parent holder key %q",
 			child.Issuer, parent.HolderKeyURI)
 	}
 	if child.Depth != parent.Depth+1 { // 4d (I2)
-		return fmt.Errorf("core: child del_depth %d, want parent %d + 1 (§7 step 4d, I2)",
+		return Deny("§7 step 4d, I2", "core: child del_depth %d, want parent %d + 1",
 			child.Depth, parent.Depth)
 	}
 	if child.Depth > parent.MaxDepth { // 4e (I2)
-		return fmt.Errorf("core: child del_depth %d exceeds parent del_max_depth %d (§7 step 4e, I2)",
+		return Deny("§7 step 4e, I2", "core: child del_depth %d exceeds parent del_max_depth %d",
 			child.Depth, parent.MaxDepth)
 	}
 	if child.Depth > lim.MaxDelegationDepth { // 4f (I2)
-		return fmt.Errorf("core: child del_depth %d exceeds MaxDelegationDepth %d (§7 step 4f, I2)",
+		return Deny("§7 step 4f, I2", "core: child del_depth %d exceeds MaxDelegationDepth %d",
 			child.Depth, lim.MaxDelegationDepth)
 	}
 	if child.MaxDepth > parent.MaxDepth { // 4g (I2)
-		return fmt.Errorf("core: child del_max_depth %d exceeds parent's %d (§7 step 4g, I2)",
+		return Deny("§7 step 4g, I2", "core: child del_max_depth %d exceeds parent's %d",
 			child.MaxDepth, parent.MaxDepth)
 	}
 	if child.Expires > parent.Expires { // 4h (I3)
-		return fmt.Errorf("core: child exp %d outlives parent exp %d (§7 step 4h, I3)",
+		return Deny("§7 step 4h, I3", "core: child exp %d outlives parent exp %d",
 			child.Expires, parent.Expires)
 	}
 	if child.Expires <= now { // 4i (I3)
-		return fmt.Errorf("core: child exp %d is not after now %d (§7 step 4i, I3)", child.Expires, now)
+		return Deny("§7 step 4i, I3", "core: child exp %d is not after now %d", child.Expires, now)
 	}
 	if child.IssuedAt < parent.IssuedAt { // 4j (I3)
-		return fmt.Errorf("core: child iat %d precedes parent iat %d (§7 step 4j, I3)",
+		return Deny("§7 step 4j, I3", "core: child iat %d precedes parent iat %d",
 			child.IssuedAt, parent.IssuedAt)
 	}
 	if child.IssuedAt > now+lim.MaxIATSkew { // 4k (I3)
-		return fmt.Errorf("core: child iat %d exceeds now %d plus MaxIATSkew %d (§7 step 4k, I3)",
+		return Deny("§7 step 4k, I3", "core: child iat %d exceeds now %d plus MaxIATSkew %d",
 			child.IssuedAt, now, lim.MaxIATSkew)
 	}
 	if child.Expires <= child.IssuedAt { // 4l (I3)
-		return fmt.Errorf("core: child exp %d is not after its iat %d (§7 step 4l, I3)",
+		return Deny("§7 step 4l, I3", "core: child exp %d is not after its iat %d",
 			child.Expires, child.IssuedAt)
 	}
 	if child.Depth > child.MaxDepth { // 4m (I2)
-		return fmt.Errorf("core: child del_depth %d exceeds its own del_max_depth %d (§7 step 4m, I2)",
+		return Deny("§7 step 4m, I2", "core: child del_depth %d exceeds its own del_max_depth %d",
 			child.Depth, child.MaxDepth)
 	}
 	return CheckI4(child.Caps, parent.Caps) // 4p (I4)
