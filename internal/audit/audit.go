@@ -84,6 +84,16 @@ type Chain struct {
 	LeafJTI  string `json:"leaf_jti,omitempty"`
 	Depth    *int   `json:"depth,omitempty"`
 	MaxDepth *int   `json:"max_depth,omitempty"`
+
+	// SameScope holds the chain positions of derivations that narrowed no
+	// authority dimension (§6, final paragraph): same tools, same constraints,
+	// same exp, same del_max_depth. Position 1 is the first derivation.
+	//
+	// It rides on the chain rather than on the decision because it describes
+	// chain shape, not the outcome. A record carrying it is still a permit —
+	// §6 declares such derivations valid — so this is a field to alert on, not
+	// a third value of Decision.
+	SameScope []int `json:"same_scope,omitempty"`
 }
 
 type PoP struct {

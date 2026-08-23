@@ -122,7 +122,11 @@ func (e *Enforcer) Decide(tool string, rawArgs json.RawMessage, meta map[string]
 	d.chain.Depth, d.chain.MaxDepth = facts.depth, facts.maxDepth
 
 	// --- Stages 2, 3 and 4: §7 steps 1-8 ----------------------------------
-	if err := e.Verifier.Verify(b.chain, tool, b.args, b.pop); err != nil {
+	rep, err := e.Verifier.VerifyReport(b.chain, tool, b.args, b.pop)
+	// Reported before the error is consulted: a denied chain's shape is still
+	// worth recording, and a same-scope link is not why it was denied.
+	d.chain.SameScope = rep.SameScope
+	if err != nil {
 		// One stage label for the three, because one call decided them and
 		// claiming to know which of the three refused would mean reading it
 		// back out of the error text. The ref is precise regardless: it comes
@@ -132,6 +136,15 @@ func (e *Enforcer) Decide(tool string, rawArgs json.RawMessage, meta map[string]
 	d.step("verify", "§7 steps 1-6", "pass", "chain verified: signatures, I1-I5, depth, TTL, capability subsumption")
 	d.step("capability", "§7 step 6b", "pass", "leaf authorizes the tool and every argument satisfies its constraint")
 	d.step("pop", "§7 step 7", "pass", "PoP verified under the leaf holder key: aat_id, aat_tool, JCS hta, iat window")
+	// §6, final paragraph. Logged, never denied: the draft calls a derivation
+	// that narrows nothing valid, so this stays a pass step on a permitted
+	// invocation. The signal is that a delegation depth was spent buying no
+	// attenuation, which is what a stolen-and-relayed token looks like.
+	if len(rep.SameScope) > 0 {
+		d.step("verify", "§6", "pass", fmt.Sprintf(
+			"same-scope derivation at chain position(s) %v: valid, narrowed nothing, flagged for review",
+			rep.SameScope))
+	}
 
 	// The PoP's own identifiers, for the record. A bare payload decode rather
 	// than a second ParsePoP: verification just parsed, canonicalized and
