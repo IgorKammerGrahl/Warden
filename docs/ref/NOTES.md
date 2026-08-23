@@ -142,3 +142,85 @@ empty range is already the most restrictive constraint expressible.
 
 **Worth raising.** Low priority. It is a corner an issuer reaches only by
 mistake, and both readings are safe. One sentence would still settle it.
+
+## 5. §4.5 declares no rule for pairs that are plausibly sound attenuations
+
+**What the draft says.** §4.5 gives a subsumption rule per (derived, parent)
+type pair: three rules for a derived `exact`, seven same-type rules, the
+wildcard row, and one explicit prohibition ({`one_of`, `not_one_of`}). §3.5.1
+property 2 makes everything else default-deny: an undeclared pair is not
+subsumption, so the derivation is rejected.
+
+**What it leaves open.** Whether the undeclared pairs are undeclared because
+they are unsound, or only because nobody wrote them down. The draft does not
+say, and the two are not distinguishable from the text.
+
+`TestCompletenessProbe` measures the gap. Over 200,000 rapid checks it searched
+for a *witness* behind every `Subsumes` false — a value the derived constraint
+accepts and the parent rejects, which proves the rejection was right. Of the
+151,286 rejections that came from default-deny rather than from a declared
+rule, **46,071 (30.5%) had no witness**. Some of that is the sampled value
+space being too small to contain one, but the shape of the residue is
+suggestive: a derived `exact` under a parent `not_one_of` that does not exclude
+its value, an array-valued `exact` under a parent `subset` that allows its
+elements, an `all` whose every clause narrows a single-typed parent. Each is a
+real attenuation by the plain meaning of §3.4, and each is denied.
+
+**What warden does.** Denies them, exactly as written. Default-deny is the
+safe direction — §3.5.1 property 2 constrains only false positives, and
+warden's `permitted` matrix is an allowlist for that reason. The cost is
+interop: an issuer that mints a semantically attenuating derivation across an
+undeclared pair produces a chain warden rejects, and a more liberal
+implementation might not.
+
+**Worth raising.** Yes, as an observation rather than a defect report. The
+question for the WG is whether §4.5's table is meant to be exhaustive — in
+which case a sentence saying so would close it — or whether the missing pairs
+are an oversight to be filled in. Either answer is implementable; the silence
+is what costs.
+
+## 6. §7 never states that prefix presentation is safe, and it is safe only by PoP
+
+**What the draft says.** §7 verifies the chain it is given. Step 3c requires the
+root's `del_depth` to be 0, step 4d requires each child to increment it by
+exactly one, and step 5 then checks `len(chain) == leaf.del_depth + 1` — a check
+the draft itself labels "(Defense in depth)", and which the two preceding rules
+have already made unreachable.
+
+**What it leaves open.** The consequence. **Any prefix of a valid chain is
+itself a valid chain under §7.** An intermediate holder can present the chain
+truncated at its own token and be authorized for that prefix-leaf's capability
+set — which is *wider* than the real leaf's, since every link attenuates. The
+draft never says this, and never says why it is acceptable.
+
+It is acceptable, and the reason is a single mechanism: step 7b requires a PoP
+signed under the presented leaf's `cnf.jwk`. Only the holder of that key can
+produce one, and that holder legitimately held that authority — presenting the
+prefix grants it nothing it did not already have. The property is sound.
+
+What is missing is that the draft relies on this without noting the reliance.
+Compare §4.6, where `par_hash` exists *precisely because* a signature plus I1 do
+not bind a child to a unique parent instance — the draft identifies the gap and
+adds a redundant binding to close it. Here the same class of reasoning applies
+and no second mechanism appears: authority containment across prefixes rests
+entirely on PoP, with nothing behind it. A conformant implementation that added
+a PoP-less "verify the chain only" mode — for an audit tool, a dry-run
+endpoint, a debugging CLI — would silently lose the property, and §7 gives its
+author no reason to suspect that mode is different in kind.
+
+**What warden does.** Accepts prefixes, because §7 says to.
+`TestChainPrefixIsItselfAValidChain` asserts the acceptance rather than leaving
+it as an untested emergent behaviour, and records the reasoning above at the
+call site. `Verifier.Verify` takes the PoP as a required argument, not an
+optional one: there is no code path through it that authorizes without step 7.
+
+**Worth raising.** Yes. One sentence in §7 or §8 — "note that any prefix of a
+valid chain is a valid chain; containment of the wider prefix authority depends
+on the §5.3 proof of possession" — costs the draft nothing and closes the trap
+for the implementer who is about to write the dry-run mode.
+
+**M4:** prefix presentation belongs in the adversarial corpus, alongside the
+I1–I6 violations. The attacker case is not the legitimate holder truncating
+their own chain; it is a holder who has obtained a *downstream* token's chain
+and truncates it to a prefix whose PoP key they control, and the test asserts
+that only the PoP stops them.

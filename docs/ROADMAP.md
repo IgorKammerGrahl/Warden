@@ -140,6 +140,11 @@ chain with someone else's PoP, a replayed PoP, or a mismatched `hta` (I6) — pl
 the §7 mechanical bypasses: `alg: none`, HS256 confusion, duplicate `jti`, oversize
 chain, over-deep constraint tree, unknown constraint type.
 
+**Plus prefix presentation** (`docs/ref/NOTES.md` #6): any prefix of a valid chain
+is a valid chain, so a holder who obtains a downstream chain and truncates it to a
+prefix whose PoP key they control is authorized at that prefix's wider capability
+set. The scenario exists to demonstrate that PoP is the *only* thing stopping it.
+
 **The benign corpus must contain a sibling-delegation scenario:** one parent
 grants a budget, derives two children with overlapping sub-grants, and both spend
 concurrently. This is the case per-branch allocation (D11) exists to get right, and
