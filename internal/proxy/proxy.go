@@ -1,11 +1,20 @@
 // Package proxy relays MCP JSON-RPC between a client and one upstream server
 // over stdio, auditing every tools/call.
 //
-// M1 is passthrough: every message is forwarded, nothing is denied, and there
-// is no call into aat.Verifier anywhere in this file. That is deliberate and
-// load-bearing — M1's latency numbers are the control M4's enforcement overhead
-// is measured against, so the request path must contain no authorization
-// decision. Enforcement is M2 (ARCHITECTURE §3.2, which ships live there).
+// The proxy runs in exactly one of two modes, and Run refuses to start unless
+// exactly one is configured.
+//
+// PassthroughOnly forwards every message and denies nothing: no call into
+// aat.Verifier is reachable from this path. That is deliberate and load-bearing
+// rather than a leftover — it is the control M4's enforcement overhead is
+// measured against, so it must contain no authorization decision at all. A
+// Verify call here whose result was discarded would still put Ed25519 work into
+// the baseline and silently deflate the reported overhead.
+//
+// Enforce runs the ARCHITECTURE §3.2 pipeline before forwarding, and a call it
+// refuses is never written upstream. The client is answered with a JSON-RPC
+// error rather than a dropped message or a closed pipe: an agent that cannot
+// distinguish a refusal from a hang retries instead of adapting.
 package proxy
 
 import (
@@ -30,8 +39,9 @@ const (
 	MetaSpec  = "dev.warden/spec"
 )
 
-// SpecVersion is the pinned draft identifier (ARCHITECTURE §3.1). M1 records
-// what arrived and compares nothing; a mismatch is an M2 denial.
+// SpecVersion is the pinned draft identifier (ARCHITECTURE §3.1). Passthrough
+// records what arrived and compares nothing; enforcing, a mismatch is a denial
+// at the binding stage, before any signature work.
 const SpecVersion = "draft-niyikiza-oauth-attenuating-agent-tokens-01"
 
 // Proxy relays one client to one upstream MCP server.
@@ -44,15 +54,25 @@ type Proxy struct {
 	Audit *audit.Writer
 	Log   *log.Logger // diagnostics; must not be backed by ClientOut
 
-	// PassthroughOnly is redundant in M1 and load-bearing in M2: it is what
-	// lets M1's baseline be re-measured on a binary that has enforcement
-	// compiled in. M1 refuses to run with it false so that the flag cannot
-	// silently mean nothing.
+	// PassthroughOnly relays without deciding. It is what lets M1's baseline
+	// be re-measured on a binary that has enforcement compiled in, which is
+	// the only reason the enforcement overhead figure means anything.
 	PassthroughOnly bool
+
+	// Enforce runs the §3.2 pipeline. Exactly one of this and
+	// PassthroughOnly must be set; see Run.
+	Enforce *Enforcer
 
 	mu      sync.Mutex
 	pending map[string]*call
 	seq     uint64
+
+	// outMu serializes writes to ClientOut. Both pumps write there once
+	// denials exist — the relay pump forwards responses and the request pump
+	// answers refusals — and two interleaved writes would splice two JSON
+	// values into one unparseable line.
+	outMu sync.Mutex
+	outFr framer
 }
 
 // call is a tools/call awaiting its response.
@@ -68,14 +88,36 @@ type call struct {
 	meta  metaInfo
 	t0    time.Time // first byte read from the client
 	tSend time.Time // first byte written to upstream
+
+	// rawMeta is params._meta, kept only until the decision is made and
+	// then released: a chain is up to MAX_STACK_SIZE bytes and a pending
+	// call has no further use for one.
+	rawMeta map[string]json.RawMessage
+	// dec is the §3.2 outcome, nil in passthrough.
+	dec *decision
 }
 
-var errNotPassthrough = errors.New("proxy: M1 runs in passthrough-only mode; PassthroughOnly must be set")
+var (
+	errNoMode = errors.New("proxy: neither PassthroughOnly nor Enforce is set; " +
+		"a proxy with no mode would relay unauthorized calls, so it does not start")
+	errBothModes = errors.New("proxy: PassthroughOnly and Enforce are both set; " +
+		"passthrough is the unenforced control measurement and enforcing is the guardrail, " +
+		"and a flag that can mean either silently means neither")
+)
 
 // Run relays in both directions until either side ends, then stops the other.
+//
+// Exactly one mode, checked here rather than defaulted: the default that reads
+// as safe (enforce) turns a misconfigured operator into a broken deployment,
+// and the default that reads as convenient (passthrough) turns one into an open
+// proxy. Refusing to start is the only outcome that is wrong in neither
+// direction.
 func (p *Proxy) Run() error {
-	if !p.PassthroughOnly {
-		return errNotPassthrough
+	switch {
+	case p.PassthroughOnly && p.Enforce != nil:
+		return errBothModes
+	case !p.PassthroughOnly && p.Enforce == nil:
+		return errNoMode
 	}
 	p.pending = make(map[string]*call)
 
@@ -130,25 +172,46 @@ func (p *Proxy) clientToServer(cr *stampReader) error {
 		// requirement, not a performance shortcut. Do not "clean this up"
 		// into a decode/encode round trip.
 		c := p.inspect(raw, t0)
+		if c != nil && c.key == "" && p.PassthroughOnly {
+			// A tools/call with no id has no response to pair with, so
+			// passthrough has nothing to time and does not record it.
+			// Enforcing does not get that luxury; see authorize.
+			c = nil
+		}
+
+		if c != nil && p.Enforce != nil && !p.authorize(c) {
+			// Refused. Never written upstream — that is the whole point —
+			// and the client has already been answered and the record
+			// already written by authorize.
+			continue
+		}
 
 		// Registered before the write, not after. A fast upstream can have
 		// its response decoded by the other pump before a post-write
 		// registration lands, and that response would find no pending call
 		// and go unaudited — a race that gets rarer, never absent, as the
 		// upstream gets slower.
-		if c != nil {
+		if c != nil && c.key != "" {
 			c.tSend = time.Now()
 			p.mu.Lock()
 			p.pending[c.key] = c
 			p.mu.Unlock()
 		}
 		if err := fr.write(p.ServerIn, raw); err != nil {
-			if c != nil {
+			if c != nil && c.key != "" {
 				p.mu.Lock()
 				delete(p.pending, c.key)
 				p.mu.Unlock()
 			}
 			return p.endOfStream("upstream-write", err)
+		}
+		if c != nil && c.key == "" {
+			// An authorized tools/call notification. Nothing will come back
+			// to close the record out, so it is closed here; the upstream
+			// span is unmeasurable rather than zero, and is recorded as
+			// zero with that stated in the trace.
+			c.tSend = time.Now()
+			p.emitNoResponse(c)
 		}
 	}
 }
@@ -157,7 +220,6 @@ func (p *Proxy) clientToServer(cr *stampReader) error {
 // tools/call it answers.
 func (p *Proxy) serverToClient(sr *stampReader) error {
 	dec := json.NewDecoder(sr)
-	var fr framer
 	for {
 		sr.arm()
 		var raw json.RawMessage
@@ -168,7 +230,7 @@ func (p *Proxy) serverToClient(sr *stampReader) error {
 
 		key := responseKey(raw)
 
-		if err := fr.write(p.ClientOut, raw); err != nil {
+		if err := p.writeClient(raw); err != nil {
 			return p.endOfStream("client-write", err)
 		}
 		t3 := time.Now()
@@ -263,6 +325,79 @@ func (p *Proxy) reportOrphans() {
 	}
 }
 
+// writeClient frames one message to the client under outMu.
+func (p *Proxy) writeClient(raw []byte) error {
+	p.outMu.Lock()
+	defer p.outMu.Unlock()
+	return p.outFr.write(p.ClientOut, raw)
+}
+
+// authorize runs the §3.2 pipeline for one tools/call and reports whether it may
+// be forwarded. A false return has already answered the client and written the
+// record; the caller only has to not forward.
+func (p *Proxy) authorize(c *call) bool {
+	// The audit sink is checked before anything else, ahead of every
+	// signature verification, because §6 makes a guardrail that cannot record
+	// its decisions refuse to make them. This is not an authorization
+	// outcome: no chain was examined, nothing about the caller's tokens is
+	// implicated, and the refusal deliberately carries a different error code
+	// and a different diagnostic so an operator is not sent looking at a
+	// token chain when the real problem is a full disk.
+	if p.Audit != nil {
+		if err := p.Audit.Err(); err != nil {
+			p.logf("AUDIT SINK FAILED — refusing every call until wardend is restarted. "+
+				"The cause is the audit sink, not the token chain: %v", err)
+			p.replyError(c, ErrCodeAuditUnavailable,
+				"warden: audit sink unavailable; the proxy will not authorize a call it cannot record", nil)
+			return false
+		}
+	}
+
+	c.dec = p.Enforce.Decide(c.tool, c.args, c.rawMeta)
+	c.rawMeta = nil
+	if c.dec.allow {
+		return true
+	}
+	// stage and ref only. The client learns which check refused and which
+	// clause of the specification says so, which is what lets a well-behaved
+	// agent adapt; it does not learn the constraint it violated, because the
+	// values in a constraint are the parent's policy and not the child's to
+	// read back out of a denial.
+	p.replyError(c, ErrCodeDenied, "warden: request denied by the authorization policy",
+		map[string]string{"stage": c.dec.stage, "ref": c.dec.ref})
+	p.emitNoResponse(c)
+	return false
+}
+
+// replyError answers one refused call with a JSON-RPC error.
+func (p *Proxy) replyError(c *call, code int, message string, data map[string]string) {
+	if c.key == "" {
+		// A tools/call sent as a notification. JSON-RPC defines no response
+		// to one, so there is nowhere to put the refusal — but dropping the
+		// message is still the right outcome and the only one that is not a
+		// bypass. It is logged because it is otherwise invisible to
+		// everyone: the client expects no answer and gets none either way.
+		p.logf("denied a tools/call %q sent as a notification (no id, so no error response is possible): %s",
+			c.tool, message)
+		return
+	}
+	if err := p.writeClient(rpcError(json.RawMessage(c.key), code, message, data)); err != nil {
+		p.logf("failed to deliver the denial to the client: %v", err)
+	}
+}
+
+// emitNoResponse closes out a record for a call that will never have an
+// upstream response: one that was refused, or an authorized notification.
+func (p *Proxy) emitNoResponse(c *call) {
+	if p.Audit == nil {
+		return
+	}
+	r := p.record(c)
+	if err := p.Audit.Write(r, audit.Timing{Total: time.Since(c.t0)}); err != nil {
+		p.logf("audit write failed: %v", err)
+	}
+}
+
 func (p *Proxy) emit(c *call, upstreamErr bool, t audit.Timing) {
 	if p.Audit == nil {
 		return
@@ -280,9 +415,13 @@ func (p *Proxy) emit(c *call, upstreamErr bool, t audit.Timing) {
 	}
 }
 
-// record builds the §6 record for a call, with the M1 bind-stage trace. There
-// is no verify stage, no capability stage and no PoP stage: those are M2, and
-// an empty entry claiming otherwise would be worse than their absence.
+// record builds the §6 record for a call.
+//
+// Passthrough gets the observed binding and a single bind-stage trace entry:
+// there is no verify stage, no capability stage and no PoP stage, because none
+// of them ran, and an empty entry claiming otherwise would be worse than their
+// absence. Enforcing gets the decision's own trace, one entry per §3.2 stage
+// that executed, ending at the one that refused.
 func (p *Proxy) record(c *call) audit.Record {
 	m := c.meta
 	r := audit.Record{
@@ -297,9 +436,25 @@ func (p *Proxy) record(c *call) audit.Record {
 		},
 		PoP: audit.PoP{Present: m.popPresent, Bytes: m.popBytes},
 	}
-	r.Trace = append(r.Trace, audit.Step{
-		Stage: "bind", Ref: "ARCHITECTURE §3.1", Outcome: m.outcome(), Detail: m.detail(),
-	})
+	if c.dec == nil {
+		r.Trace = append(r.Trace, audit.Step{
+			Stage: "bind", Ref: "ARCHITECTURE §3.1", Outcome: m.outcome(), Detail: m.detail(),
+		})
+		return r
+	}
+
+	r.Decision = audit.DecisionDeny
+	if c.dec.allow {
+		r.Decision = audit.DecisionPermit
+	}
+	// The decision's richer view replaces the presence-and-size one only when
+	// binding succeeded. A record for a call denied at the binding stage keeps
+	// what readMeta observed without interpreting anything, which is all
+	// warden legitimately knows about a chain it could not bind.
+	if c.dec.chain.Present {
+		r.Chain, r.PoP = c.dec.chain, c.dec.pop
+	}
+	r.Trace = append(r.Trace, c.dec.trace...)
 	return r
 }
 
@@ -345,21 +500,27 @@ func (p *Proxy) inspect(raw []byte, t0 time.Time) *call {
 		// Forward it; shaping the client's traffic is not M1's job.
 		return nil
 	}
-	if msg.Method != "tools/call" || len(msg.ID) == 0 {
-		return nil // notifications carry no id and get no response to pair with
+	if msg.Method != "tools/call" {
+		return nil
 	}
+	// A missing id is kept, not skipped. It means the client sent the call as
+	// a notification, and in enforcing mode dropping it from consideration
+	// would be a bypass: the tool still runs upstream, and the client simply
+	// gives up the response it was never going to read. The caller decides
+	// what an id-less call means in its mode.
 	p.mu.Lock()
 	p.seq++
 	corr := "c" + strconv.FormatUint(p.seq, 10)
 	p.mu.Unlock()
 
 	return &call{
-		key:  string(msg.ID),
-		corr: corr,
-		tool: msg.Params.Name,
-		args: msg.Params.Arguments,
-		meta: readMeta(msg.Params.Meta),
-		t0:   t0,
+		key:     string(msg.ID),
+		corr:    corr,
+		tool:    msg.Params.Name,
+		args:    msg.Params.Arguments,
+		meta:    readMeta(msg.Params.Meta),
+		rawMeta: msg.Params.Meta,
+		t0:      t0,
 	}
 }
 
