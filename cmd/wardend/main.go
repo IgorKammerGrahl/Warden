@@ -58,7 +58,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	anchorsPath := fs.String("trust-anchors", "",
 		"path to a JSON array of trust-anchor JWKs; required unless -passthrough-only")
 	audience := fs.String("audience", "",
-		"require every PoP to carry a matching aat_aud (§7 step 7d); empty means this deployment does not require audience binding")
+		"require every PoP to carry a matching aat_aud (§7 step 7d); empty means this deployment does not require audience binding, "+
+			"which per §8.5 lets a PoP captured here replay at any other enforcement point that accepts the same chain — set it if there is more than one")
 	maxDepth := fs.Int("max-delegation-depth", 8,
 		"the deployment's MAX_DELEGATION_DEPTH (§4.3); the draft recommends no value, topology decides")
 	stats := fs.Bool("stats", true, "print the latency distributions to stderr on exit")

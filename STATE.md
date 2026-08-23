@@ -1,14 +1,14 @@
 # warden — STATE
 
-Updated: 2026-08-23 (M1 closed)
+Updated: 2026-08-23 (M2 closed)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
-to start M2 without re-exploring the repo.
+to start M3 without re-exploring the repo.
 
 ## Current position
 
-**M0a, M0b1, M0b2 and M1 are complete.** M2 has not started.
+**M0a, M0b1, M0b2, M1 and M2 are complete.** M3 has not started.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -28,11 +28,19 @@ relays JSON-RPC between a client and one upstream server and writes an audit
 record per `tools/call`. It calls nothing in `internal/core` and nothing in
 `internal/aat` except the JCS canonicalizer, and that only to digest arguments.
 
-**The library is feature-complete for offline chain verification, and nothing
-enforces it yet.** What does not exist: no allow/deny anywhere, no policy file,
-no key management, no revocation, no counters, no HTTP/SSE transport, no
-`wardenctl audit tail`, no interop test against another implementation. That is
-M2 onward.
+M2 connected the two. `wardend` now denies: every `tools/call` runs the §3.2
+pipeline, an unbound or out-of-authority call comes back to the client as a
+JSON-RPC error citing the clause that refused it, and the same citation is in
+the audit record. `-passthrough-only` keeps M1's unenforced path alive on the
+same binary, which is what makes the overhead figure a measurement rather than
+a comparison of two builds.
+
+**warden enforces the stateless half of the draft.** What does not exist: no
+`invocation_constraints`, no budget or rate counters, no PoP `jti` replay set,
+no revocation, no policy file, no key rotation, no HTTP/SSE transport, no
+`wardenctl audit tail`, no interop test against another implementation. Every
+one of those is state, configuration or transport rather than a hole in the
+verification algorithm — the §7 path is complete and enforced.
 
 ---
 
@@ -48,7 +56,8 @@ internal/aat/jws/                            RFC 7515 compact serialization, Ed2
 internal/aat/                                AAT claim set, JWK/thumbprints, PoP JWT
 internal/core/                               domain: §3.4 constraints, §3.3 capabilities, I1-I4
 internal/audit/                              the ARCHITECTURE §6 decision record, JSONL, latency stats
-internal/proxy/                              the M1 relay: framing, _meta extraction, correlation
+internal/aat/aattest/                        shared chain fixture: one chain, minted the same way for every test
+internal/proxy/                              the relay (framing, correlation) and the §3.2 enforcement pipeline
 internal/testserver/                         ~100-line stdio MCP server, the e2e's upstream peer
 cmd/wardend/                                 the daemon: flags, subprocess, wiring, latency report
 ```
@@ -271,6 +280,236 @@ Three things a caller must know:
 
 ---
 
+## M2 exit state
+
+`wardend` runs the ARCHITECTURE §3.2 pipeline on every `tools/call` and
+authorizes nothing without a chain. `go test ./... -race` is green across nine
+packages; `go vet` and `gofmt -l` are clean.
+
+### The pipeline, and the one ordering that matters
+
+`(*Enforcer).Decide` in `internal/proxy/enforce.go`. Five stages, first failure
+short-circuits, every stage appends a trace step carrying its own `ref`:
+
+1. **bind** — ARCHITECTURE §3.1. `_meta` must carry all three of
+   `dev.warden/chain`, `dev.warden/pop`, `dev.warden/spec`; the chain must be a
+   non-empty JSON array of non-empty strings, the PoP a non-empty JSON string,
+   and the spec an **exact** match for `proxy.SpecVersion`. Then the number
+   guard (below), then the arguments decode.
+2. **verify** — §7 steps 1-5, one `aat.Verifier.Verify` call.
+3. **capability** — §7 step 6, the closed-world invocation check.
+4. **pop** — §7 step 7.
+5. **extensions** — §2.4 / ADR 0001: a chain carrying `invocation_constraints`
+   is rejected, never ignored.
+
+Stages 2-4 are one call into `aat` because §5.3 requires that order and the
+verifier already implements it. **A valid PoP over an invalid chain does not
+authorize, and the capability check runs before the PoP check** — the second is
+not obvious and it is load-bearing, so `TestCapabilityPrecedesPoP` pins it as a
+property rather than leaving it as an emergent consequence of call order. It is
+also why a denial's citation is sometimes "earlier" than the test author
+expects: an invocation whose arguments the leaf never authorized reports §3.4,
+not §7 step 7f, because step 6 refused it first.
+
+### The invariant that governs unverified data
+
+`Decide` reads the chain's payloads once **before** any signature is checked, to
+learn the root and leaf `jti`, the depth, and whether any token carries
+`invocation_constraints`. The rule, stated in a comment at the call site:
+
+> data read here comes from payloads whose signatures have not been checked, and
+> it may only ever ADD a denial — never authorize one.
+
+It feeds exactly two consumers: the audit record's chain fields, which are a log
+and not a decision, and the stage-5 gate, which can only refuse. Nothing on the
+permit path reads it. This is the general form of the §7 step 2c carve-out,
+where the draft itself reads `jti` values out of unverified tokens to detect a
+cycle — safe for the same reason, and for no other.
+
+One consequence to keep in mind when reading a trace: the §2.4 fact is
+*collected* during that pass but *decided* at stage 5, so a chain that both
+carries `invocation_constraints` and fails its signature reports the signature.
+`TestDecideDeniesInvocationConstraints` asserts that ordering deliberately.
+
+### Fail-closed, and what the client is told
+
+Two error codes, and the distinction is the point:
+
+- **-32001** `warden: request denied by the authorization policy`. `data`
+  carries `stage` and `ref` and nothing else. The client learns which check
+  refused and which clause of a public specification says so, which is what
+  lets a well-behaved agent adapt. It does not learn the constraint it
+  violated: the values in a constraint are the parent's policy, not the child's
+  to read back out of a denial. `TestEnforcingRelayDenies` asserts both halves —
+  the client's `ref` equals the audit record's, and no constraint value leaks.
+- **-32002** `warden: audit sink unavailable`. Not an authorization outcome. A
+  proxy that silently starts refusing everything because the disk filled is
+  indistinguishable from an authorization bug, and an operator sent to read a
+  token chain when the real problem is a full disk has been sent to the wrong
+  place. The stderr line says so in as many words.
+
+Both are inside JSON-RPC's -32000..-32099 implementation-defined range.
+
+### The notification bypass — the sharpest thing M2 found
+
+A `tools/call` sent as a JSON-RPC **notification** has no `id`. M1's `inspect`
+returned `nil` for it, because with no `id` there is nothing to correlate a
+response against, and a pipeline built around correlated request/response pairs
+treats it as uninteresting. Enforcing, that is a hole with no floor under it:
+the call would have been forwarded unverified, and **the caller does not need a
+response for the side effect to land.**
+
+`inspect` now returns a call for every `tools/call`, `id` or not. An
+unauthorized one is denied and never forwarded; the audit record is emitted with
+`emitNoResponse`, since there will be no response to time. The JSON-RPC error is
+still written — a notification is not supposed to get one, but a message warden
+refuses is not a message warden is relaying, and silence would leave the client
+believing a call happened. `TestNotificationIsNotABypass` names it; a regression
+here is silent, which is the only reason the test is worth more than the code.
+
+`-passthrough-only` keeps M1's drop-it behaviour exactly, so the control
+measurement still measures the same thing.
+`TestPassthroughStillIgnoresNotifications` pins that too.
+
+### The number guard — RFC 8785 collapses values §7 step 7f then cannot tell apart
+
+`jcs.CheckNumbers`, applied at bind, denies any argument containing a JSON
+number that RFC 8785 canonicalization would not round-trip. See
+`docs/ref/NOTES.md` #7 for the full write-up; the short version is that RFC 8785
+serializes numbers through IEEE 754 binary64, so `9007199254740993` and
+`9007199254740992` share one canonical form, step 7f cannot distinguish them,
+and warden forwards the client's **original** bytes upstream — so the server can
+act on a value no PoP committed to and no constraint ever checked.
+
+Two things to not misremember about this:
+
+- **It is not a Go decoding artifact.** `encoding/json` does decode into
+  `float64` and does lose the same information, but that loss is invisible to
+  step 7f, because both sides of the comparison pass through it and agree.
+  `TestCanonicalizeIsUnchangedByAGoValueRoundTrip` confirms it byte-for-byte
+  over ±2^53, 1e21, 5e-324 and 30-digit integers. The gap is in the
+  canonicalization the draft requires, and an implementation that never touches
+  a float has it too.
+- **It is deliberately not inside `Canonicalize`.** That function's contract is
+  RFC 8785's own test vectors, which is the entire reason M0a is a separate
+  milestone; a canonicalizer that refuses inputs the RFC canonicalizes is no
+  longer the thing those vectors validate, and folding a policy check into the
+  primitive would make a future interop failure unattributable.
+
+### Replay resistance is probabilistic, and that is a known gap
+
+§7 step 7g only: the PoP's `iat` is checked against the clock tolerance window
+(`aat.DefaultPoPSkew`), nothing is remembered between requests, and the replay
+window is therefore roughly twice the skew. **warden does not satisfy §8.5's
+MUST for irreversible or side-effecting tools**, which requires stateful `jti`
+tracking.
+
+Deferred to M3 as two problems, not one, because they are two: the per-tool
+irreversibility classification (§8.5 conditions its MUST on it and the protocol
+carries no way to obtain it — see NOTES.md #9), and the replay state itself.
+The second is the same class of problem as the `dev.warden/budget` counters — a
+key, a location, a loss policy, a consistency requirement that depends on
+deployment topology — and there are four unresolved ADR 0001 issues about
+exactly that class. A second state store before the first is settled doubles
+the debt and buys no conformance, since the tracking could not be applied
+selectively the way §8.5 directs anyway.
+
+### The audit-failure latch
+
+Per-process, never clears, reported under -32002.
+
+- **Per-process, not per-connection.** There is one sink and one file handle; a
+  per-connection latch would let the next connection re-discover the failure for
+  itself and authorize calls in the window before it did.
+- **Never clears.** "The sink recovered" is only observable by writing, and
+  writing is what failed. Recovery is fix the sink and restart, which is the
+  fail-closed direction and also the one an operator can reason about.
+- **Checked first, ahead of every signature.** `(*Proxy).authorize` reads
+  `Audit.Err()` before it calls `Decide`. That is right for cost — 415ns against
+  469µs at depth 3, measured — and right for a second reason: it removes a
+  timing side channel that would otherwise let a caller distinguish a valid
+  chain from an invalid one while warden refuses both.
+  `TestAuditLatchRefusesEverythingAfterAWriteFailure` asserts `c.dec == nil`,
+  i.e. that the pipeline never ran at all.
+
+### The audience policy is a choice, not a reading
+
+`-audience` set ⇒ `aat_aud` is required and must match (§7 step 7d). Unset ⇒ the
+claim is not consulted. The draft conditions audience binding on "deployment
+policy" and defines no default, so both behaviours are conformant; NOTES.md #8
+records it as the deployment-policy choice it is. The flag's help text carries
+§8.5's warning, because the operator who needs it is the one running more than
+one enforcement point over the same chain population.
+
+### What enforcement costs
+
+Same binary, same machine, `go test -run TestEnforcementLatency ./cmd/wardend
+-v`. 300 `tools/call` per mode, nearest-rank percentiles, microseconds,
+`overhead = total - upstream`:
+
+```
+                     overhead p50   overhead p99
+passthrough (M1)         21- 31          37- 79
+enforcing, depth 1      430-665        1130-1290
+enforcing, depth 3     1070-1085        2030-2250
+enforcing, depth 5     1490-1610        2920-3310
+```
+
+Ranges over three consecutive runs, not confidence intervals — depth 1 is the
+noisy one. **Enforcement costs roughly 0.6 ms at depth 1, 1.0 ms at depth 3 and
+1.5 ms at depth 5 in p50**, and about twice that at p99.
+
+**The percentage is meaningless and the microseconds are not.** `internal/
+testserver` answers in ~14-23µs p50. Any overhead expressed as a ratio against
+a peer that fast is a statement about the peer; the same absolute cost in front
+of a real MCP server doing real work would look negligible and would not have
+become any smaller. Quote the microseconds.
+
+Note also that the `upstream` column itself rises from ~15µs passthrough to
+~40-115µs enforcing. That is not warden: a bound message carries a chain and a
+PoP in `_meta`, several KB of it at depth 5, and the test server parses what it
+is sent. It is subtracted out of `overhead` by the convention M1 fixed, but it
+is a real cost the binding imposes on the upstream and it belongs in M4's
+accounting.
+
+Where the time goes, in process, no transport
+(`go test -run '^$' -bench . ./internal/proxy`):
+
+```
+Decide, depth 1      216µs      Ed25519 verify        37µs
+Decide, depth 3      492µs      ParsePoP              17µs
+Decide, depth 5      746µs      scanChain (depth 3)   16µs
+authorize, latched   415ns
+```
+
+A CPU profile of the depth-1 path attributes ~44% to Ed25519 verification
+(`edwards25519` field arithmetic, plus ~6% in `NewPublicKey` decompressing the
+point once per verify) and most of the remainder to `encoding/json` and JCS
+canonicalization. There is no third thing: it is signatures and parsing, and
+both are linear in depth. The e2e figure runs 2-3x the in-process one, which is
+framing, pipe transit and scheduling on messages several KB larger than M1's.
+
+**Against ROADMAP M4's target of p99 < 1 ms on the stateless path at depth 3:
+the current p99 is ~2.1 ms, over by roughly a factor of two.** Recorded as the
+starting position, not as a failure — M2's exit criteria do not include it and
+nothing has been optimized yet. The profile says where the room is: warden
+re-parses and re-canonicalizes every token on every request, and a verified
+chain is immutable, so a verification cache keyed by the chain bytes is the
+obvious first move if the target has to be met.
+
+### Deliberately not done in M2
+
+- **`invocation_constraints`** — gated, not implemented. A chain carrying the
+  member is rejected under §2.4 / ADR 0001, which is the "reject, never ignore"
+  half. Enforcing it is M2's second half at the earliest.
+- **Budget and rate counters.** No counter exists anywhere. The four deferred
+  ADR 0001 issues are about where that state lives and what happens when it is
+  lost; none of them are resolved.
+- **PoP `jti` replay set.** Above.
+- **Revocation, key rotation, operator policy YAML, HTTP/SSE.**
+
+---
+
 ## M1 exit state
 
 `wardend` fronts one upstream MCP server over stdio. It spawns the server as a
@@ -412,10 +651,14 @@ know which one produced the baseline. Three further choices that go with it:
 - The three fields are truncated to whole microseconds independently, so
   `overhead_us` and `latency_us - upstream_us` may disagree by 1.
 
-`-passthrough-only` is redundant today and load-bearing in M2: it is what lets
+`-passthrough-only` was redundant in M1 and is load-bearing now: it is what lets
 this control be re-measured on a binary that has enforcement compiled in.
-`Proxy.Run` refuses to start unless it is set, so the flag cannot quietly mean
-nothing.
+`Proxy.Run` requires **exactly one** of passthrough and enforcement — neither
+is a default and both together is a startup error — so the flag cannot quietly
+mean nothing in either direction. Since M2 it defaults **off**: a guardrail
+whose default is "guard nothing" is one flag away from being nothing in
+production too. The numbers above were re-measured on the M2 binary; see M2
+exit state.
 
 ### Deliberately not done in M1
 
@@ -700,23 +943,7 @@ signature, it is in the wrong package.
 
 ## Next 3 tasks
 
-1. **M2 — Enforcement.** Wire `aat.Verifier` into `proxy.clientToServer`, gated
-   so `-passthrough-only` still bypasses it, and turn `decision` into
-   allow/deny. The audit record already has the shape; M2 fills the fields M1
-   left absent (`root_jti`, `leaf_jti`, `depth`, `max_depth`, `pop.jti`,
-   `pop.aud`, `budget_state`) and appends the real §3.2 pipeline stages to
-   `trace`, each with its normative `ref`. Start log-only against real traffic
-   before flipping the flag — it is how a deployment finds out that warden
-   denies a call some real agent makes, before a denial breaks anything. Expect
-   the first findings to be NOTES.md #5 shaped: legitimate attenuations across
-   a (derived, parent) type pair §4.5 never declared.
-
-   Two things M1 leaves on the table for M2 specifically: `aat.Parse` still
-   discards unrecognized claims, so `invocation_constraints` (ADR 0001) has
-   nothing to read; and §6's "audit failure ⇒ deny" needs implementing once
-   there is a decision to withhold.
-
-2. **Interop with the Tenuo reference implementation**
+1. **Interop with the Tenuo reference implementation**
    (`github.com/tenuo-ai/tenuo`, draft Appendix E) as a test target: a
    warden-minted chain must verify there, and a tenuo-minted chain must verify
    here. **This is the only test that validates the independent-conformant-
@@ -724,24 +951,37 @@ signature, it is in the wrong package.
    primitives against published bytes; they say nothing about whether our
    reading of the *draft* matches anyone else's. Every ambiguity in
    `docs/ref/NOTES.md` is a place where this test can fail while both sides are
-   conformant — which is exactly what makes it worth running. Now that a chain
-   verifies end to end, this is finally runnable.
+   conformant — which is exactly what makes it worth running, and warden now
+   has an enforcement point to run it against rather than a library.
+
+   NOTES.md #7 raises the stakes: warden denies argument values another
+   implementation will accept. If the interop suite carries a large integer,
+   that is the first thing it will find.
+
+2. **M3 — delegation across processes**, plus the two state surfaces M2
+   deferred into it. The chain machinery is done and tested; what M3 adds is
+   agent B holding its own keypair, `wardenctl` rendering a chain, lineage
+   revocation — and, from M2: the PoP `jti` replay set and the per-tool
+   irreversibility configuration §8.5 conditions its MUST on. Settle the four
+   ADR 0001 state issues **before** writing either, since they decide where
+   state lives and what happens when it is lost, and a second store built on an
+   unsettled answer is debt taken twice.
 
 3. **Fold the vendored draft back into ADR 0001.** The four issues below, plus
-   the §10.3.1 finding from the previous pass, are now resolvable against real
-   text rather than against our own quotation. Scheduled for the M2 pass.
+   the §10.3.1 finding, are resolvable against real text rather than against our
+   own quotation. Scheduled for the M2 pass and not done in it — M2 spent its
+   budget on the request path.
 
-Deferred out of M0b2 on purpose, none of it blocked M1, all of it in M2's way:
+Still deferred, none of it blocking:
 
-- **Revocation (§8.9) and `jti` replay caching.** `Verifier` detects a repeated
-  `jti` *within one presented chain* (step 2c cycle detection) and nothing
-  more. Cross-request replay needs state, and state needs a deployment.
-- **`invocation_constraints` (ADR 0001).** `aat.Parse` ignores unrecognized
-  claims and does not preserve them; a reader belongs with the proxy that has
-  something to enforce them against.
-- **Key management.** `Verifier.TrustAnchors` is a slice a caller populates. No
-  loading, no rotation, no expiry.
-
+- **Revocation (§8.9).** `Verifier` detects a repeated `jti` *within one
+  presented chain* (step 2c cycle detection) and nothing more.
+- **Key management.** `-trust-anchors` loads a JSON array of JWKs once at
+  startup. No rotation, no expiry, no reload.
+- **A verification cache.** The obvious answer to the depth-3 p99 above, and
+  deliberately not built yet: it is a cache keyed by attacker-supplied bytes in
+  front of the authorization decision, which is exactly the kind of thing that
+  needs designing rather than adding.
 
 ---
 
@@ -779,13 +1019,22 @@ Deferred out of M0b2 on purpose, none of it blocked M1, all of it in M2's way:
 - **Whether the draft author agrees the granularity gap is real.** ADR 0001 is
   written to be sendable to `niki@tenuo.ai` largely as-is. Not sent — Igor's call.
 
-### Enforcement-time policy, not yet implemented
+### Enforcement-time policy
 
-`MAX_DELEGATION_DEPTH` (§4.3), `MAX_IAT_SKEW` and `MAX_TOKEN_LIFETIME` (§4.4).
-`MAX_TOKEN_SIZE` (§4.3.1) *is* enforced, because it bounds an attacker-
-controlled decode path; it is a package variable rather than a constant since
-64 KiB is only RECOMMENDED and ARCHITECTURE wants it as operator config. A
-non-positive value fails closed rather than meaning "unlimited".
+Settled in M2. `MAX_DELEGATION_DEPTH` (§4.3) is `-max-delegation-depth`,
+default 8 — the draft recommends no value, topology decides. `MAX_IAT_SKEW` and
+`MAX_TOKEN_LIFETIME` (§4.4) are wired as `core.Limits{maxDepth, 30, 90 days}`
+and are **not** flags yet, because nobody has needed to move them and a flag
+nobody sets is a flag that goes stale. `MAX_TOKEN_SIZE` (§4.3.1) is enforced
+inside `aat` since it bounds an attacker-controlled decode path; it is a package
+variable rather than a constant, since 64 KiB is only RECOMMENDED and
+ARCHITECTURE wants it as operator config. A non-positive value fails closed
+rather than meaning "unlimited".
+
+Still absent: the static operator policy YAML from ROADMAP M2. Authority comes
+entirely from the chain today. That is the right order — an operator overlay
+that can only narrow is a straightforward addition on top of a working §7 path,
+whereas one written first would have had nothing to narrow.
 
 ---
 

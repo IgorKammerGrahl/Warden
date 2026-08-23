@@ -224,3 +224,135 @@ I1–I6 violations. The attacker case is not the legitimate holder truncating
 their own chain; it is a holder who has obtained a *downstream* token's chain
 and truncates it to a prefix whose PoP key they control, and the test asserts
 that only the PoP stops them.
+
+## 7. RFC 8785 collapses integers a tool can still act on, and §7 step 7f inherits it
+
+**What the draft says.** §5.2 defines `hta` as the invocation's argument map and
+§7 step 7f binds the invocation to the PoP by comparing canonical forms:
+canonicalize the presented arguments per RFC 8785 and compare against the
+canonicalization of `pop_jwt.hta`. §3.3 checks constraints against the same
+argument values. Nothing anywhere restricts what a JSON number may be.
+
+**What it leaves open.** RFC 8785 §3.2.2.3 serializes numbers through ES6
+`Number::toString`, i.e. through IEEE 754 binary64. Every JSON number outside
+binary64's exactly-representable range therefore has a canonical form that is
+not its own value, and — the part that matters — **two distinct numbers can
+share one canonical form.** `9007199254740993` and `9007199254740992` are both
+`9007199254740992` canonically. So are `1e400` and `2e400`, as `null`.
+
+Step 7f cannot tell them apart. A PoP that committed to one matches an
+invocation carrying the other, and it matches *correctly* by the letter of the
+step: the two canonical forms are equal, because canonicalization is where the
+distinction was lost. The same collapse reaches §3.3: a `range` or an `exact`
+over such a value is checked against a number the client did not send.
+
+Whether that is exploitable depends on something outside the draft — what the
+enforcement point forwards. An enforcement point that reconstructs the request
+from the canonical bytes is safe, because then the value the tool executes is
+the value that was checked. A proxy that relays the client's original bytes,
+which is what transparency requires and what warden does, is not: the upstream
+server parses `9007199254740993` with whatever precision it has, and acts on a
+value no PoP committed to and no constraint ever saw. The draft describes an
+enforcement point without saying which of the two it is, so both readings are
+conformant and only one of them is safe.
+
+This is not an artifact of any one language's JSON decoder. Go's
+`encoding/json` decodes numbers into `float64` and loses the same information,
+but that loss is invisible to step 7f — both sides of the comparison pass
+through the same transform and agree, which we confirmed byte-for-byte
+(`TestCanonicalizeIsUnchangedByAGoValueRoundTrip`, over ±2^53, 1e21, 5e-324 and
+30-digit integers). The gap is in the canonicalization the draft normatively
+requires, and an implementation that never touches a float has it too.
+
+**What warden does.** Rejects, at bind, before any signature work, citing §7
+step 7f: `jcs.CheckNumbers` re-serializes each number literal through binary64
+and denies the call when the result is not numerically equal to what arrived.
+`TestBindDeniesAmbiguousNumbers` pins it.
+
+Deliberately **not** folded into `jcs.Canonicalize`. That function's contract is
+RFC 8785's own test vectors — the property M0a exists to establish — and a
+canonicalizer that refuses inputs the RFC canonicalizes is no longer the thing
+the vectors validate. Keeping the check separate is also what keeps a future
+interop failure attributable: a mismatch against another AAT implementation is
+then a disagreement about the protocol, not about a policy we baked into a
+primitive.
+
+**Worth raising.** Yes, and this is the strongest of these entries. The fix in
+the draft is one sentence in §5.2 or §7 — either "arguments MUST NOT contain
+numbers outside the range exactly representable per RFC 8785 §3.2.2.3" or
+"enforcement points MUST forward the canonical form" — and without it, argument
+binding is exact for every value except the ones an attacker would choose.
+
+## 8. Audience binding is delegated to deployment policy, so the default is unspecified
+
+**What the draft says.** `aat_aud` is OPTIONAL (§5.2). §5.3 item 3 and §7 step
+7d both condition it identically: "when deployment policy requires PoP audience
+binding". §8.5 adds a SHOULD for deployments with multiple enforcement points,
+and states the consequence of going without — a PoP captured at one enforcement
+point is replayable at another that accepts the same chain, tool and arguments
+inside the timestamp window.
+
+**What it leaves open.** What an enforcement point does when its deployment
+policy says nothing. The draft delegates rather than underspecifies, which is a
+reasonable thing for a protocol to do; the effect on interop is the same as an
+ambiguity, because the delegation has no default. One implementation requires
+`aat_aud` always and rejects every PoP that omits it; another ignores the claim
+entirely; both are conformant, and a client that works against one fails against
+the other for reasons neither's error message will explain.
+
+**What warden does.** `-audience` is the deployment policy, made explicit:
+set it and `aat_aud` is required and must match; leave it unset and the claim is
+not consulted. This is a **choice**, not a reading — the draft permits the
+opposite default and warden is not entitled to claim otherwise. The asymmetry is
+deliberate in one direction only: a proxy that required an audience nobody
+configured would deny every call at startup, and a fail-closed default that is
+guaranteed to fail is a broken default rather than a safe one. The safety is
+moved to where §8.5 puts the risk — an operator running more than one
+enforcement point over one chain population needs the flag, and that is stated
+in the flag's own help text rather than left to be discovered.
+
+**Worth raising.** Marginally. A sentence naming the default for deployments
+that have not decided would help, but the draft's position is defensible and the
+cost here is configuration, not correctness.
+
+## 9. §8.5's replay MUST is conditioned on a fact the protocol never carries
+
+**What the draft says.** §8.5 is unusually direct. The timestamp window gives
+"probabilistic replay resistance and is appropriate only for idempotent,
+read-only tool invocations where duplicate execution is harmless." For
+invocations that are irreversible or have significant side effects, enforcement
+points "MUST implement stateful jti tracking for PoP JWTs and MUST NOT rely
+solely on the timestamp window." §7 step 7g specifies only the window.
+
+**What it leaves open.** How an enforcement point learns which invocations those
+are. Nothing in an AAT chain, a PoP, or the invocation says whether a tool
+writes; the capability names a tool and constrains its arguments, and §3.3's
+vocabulary has no notion of a side effect. So the MUST is conditioned on a
+classification the protocol provides no way to obtain, and an enforcement point
+fronting tools it did not author — which is warden's entire premise, and MCP's —
+cannot even apply it selectively the way the text directs. It can track every
+`jti`, track none, or take the classification from somewhere outside the
+protocol. §8.5's closing paragraph then declines to define the storage backend
+or the consistency model, which is fair for a protocol document but means the
+one mechanism the draft mandates is also the one it specifies least.
+
+**What warden does.** §7 step 7g only: the PoP's `iat` is checked against the
+clock tolerance window, and nothing is remembered between requests. Replay
+resistance is therefore probabilistic, bounded by roughly twice the skew, and
+warden does not currently satisfy §8.5's MUST for side-effecting tools. Stated
+plainly rather than left to be inferred from an absence.
+
+Deferred to M3 as two separate pieces, because they are two problems: the
+per-tool irreversibility configuration (operator-supplied, since the protocol
+cannot carry it) and the replay state itself. The second is the same class of
+problem as the `dev.warden/budget` counters — a key, a location, a loss policy,
+and a consistency requirement that depends on deployment topology — and there
+are four unresolved ADR 0001 issues about exactly that class. Adding a second
+state store before the first one is settled doubles the debt for no gain in
+conformance.
+
+**Worth raising.** Yes, as a question rather than a defect: how is an
+enforcement point that did not author its tools meant to obtain the
+irreversibility classification §8.5's MUST depends on? If the answer is "out of
+band, by configuration", the draft should say so, because the current text reads
+as though the enforcement point already knows.
