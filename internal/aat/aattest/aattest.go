@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/igorkg/warden/internal/aat"
 	"github.com/igorkg/warden/internal/core"
@@ -43,6 +44,11 @@ const (
 	// List is authorized by the root only, so a chain of depth 2 or more
 	// denies it at §7 step 6b. It is the "tool not in the leaf" case.
 	List = "list_dir"
+	// Echo is the one tool internal/testserver actually implements, so it is
+	// the tool the end-to-end tests invoke. Its text argument is pinned to
+	// one value at every depth, which makes any other value an
+	// out-of-authority call that a real upstream would happily have served.
+	Echo = "echo"
 )
 
 // Allowed is an invocation every fixture permits at every depth.
@@ -52,13 +58,22 @@ var Allowed = map[string]any{"path": "/data/q3.pdf", "mode": "r"}
 // of depth 2 or more it is denied by the leaf's one_of constraint (§3.4).
 var OutOfAuthority = map[string]any{"path": "/etc/shadow", "mode": "r"}
 
+// EchoAllowed and EchoDenied differ only in the value of text, so the denial
+// can be nothing but the §3.4 constraint on that argument.
+var (
+	EchoAllowed = map[string]any{"text": "hello"}
+	EchoDenied  = map[string]any{"text": "goodbye"}
+)
+
 const (
 	rootTools = `{"read_file":{"path":{"constraint_type":"one_of",` +
 		`"values":["/data/q3.pdf","/data/q4.pdf","/etc/shadow"]},` +
 		`"mode":{"constraint_type":"exact","value":"r"}},` +
-		`"list_dir":{}}`
+		`"list_dir":{},` +
+		`"echo":{"text":{"constraint_type":"exact","value":"hello"}}}`
 	delegateTools = `{"read_file":{"path":{"constraint_type":"exact","value":"/data/q3.pdf"},` +
-		`"mode":{"constraint_type":"exact","value":"r"}}}`
+		`"mode":{"constraint_type":"exact","value":"r"}},` +
+		`"echo":{"text":{"constraint_type":"exact","value":"hello"}}}`
 )
 
 // Fixture is a signed chain and the key that holds its leaf.
@@ -72,11 +87,23 @@ type Fixture struct {
 	leafHolder ed25519.PrivateKey
 	leafJTI    string
 	popSeq     int
+	now        int64
 }
 
 // New builds a chain of depth tokens: one root plus depth-1 delegations, each
-// signed by the previous holder as I1 requires.
-func New(t testing.TB, depth int) *Fixture {
+// signed by the previous holder as I1 requires. It runs against the fixed Now,
+// so iat and exp are literals and no test depends on wall time.
+func New(t testing.TB, depth int) *Fixture { return newAt(t, depth, Now) }
+
+// NewLive is New against the wall clock, for tests that drive a wardend which
+// has no injected clock of its own. Everything else is identical; only a test
+// that measures or asserts on time should reach for it, because it reintroduces
+// exactly the dependency New exists to remove.
+func NewLive(t testing.TB, depth int) *Fixture {
+	return newAt(t, depth, time.Now().Unix())
+}
+
+func newAt(t testing.TB, depth int, now int64) *Fixture {
 	t.Helper()
 	if depth < 1 {
 		t.Fatalf("aattest.New(%d): a chain has at least a root", depth)
@@ -96,6 +123,7 @@ func New(t testing.TB, depth int) *Fixture {
 		Anchor:     aat.NewJWK(pubs[0]),
 		leafHolder: privs[depth-1],
 		Chain:      make([]string, depth),
+		now:        now,
 	}
 
 	var parent *aat.Token
@@ -103,8 +131,8 @@ func New(t testing.TB, depth int) *Fixture {
 		c := aat.Claims{
 			JTI: fmt.Sprintf("01957a41-0081-7c20-bf3a-00a0c91e%04d", i+1),
 			// exp and iat only narrow as the chain descends (I3).
-			IssuedAt:             Now - 100 + int64(i)*10,
-			Expires:              Now + 3600 - int64(i)*10,
+			IssuedAt:             now - 100 + int64(i)*10,
+			Expires:              now + 3600 - int64(i)*10,
 			Confirmation:         aat.Confirmation{JWK: aat.NewJWK(pubs[i])},
 			DelegationDepth:      i,
 			MaxDelegationDepth:   depth - 1,
@@ -136,7 +164,7 @@ func (f *Fixture) Verifier() *aat.Verifier {
 		TrustAnchors: []*aat.JWK{f.Anchor},
 		Limits:       core.DefaultLimits,
 		PoPSkew:      aat.DefaultPoPSkew,
-		Now:          func() int64 { return Now },
+		Now:          func() int64 { return f.now },
 	}
 }
 
@@ -147,7 +175,7 @@ func (f *Fixture) PoP(t testing.TB, tool string, args map[string]any) string {
 	f.popSeq++
 	compact, err := aat.SignPoP(aat.PoPClaims{
 		JTI:      fmt.Sprintf("c980f2a1-4a37-4e88-bb3c-9defd37c%04d", f.popSeq),
-		IssuedAt: Now,
+		IssuedAt: f.now,
 		TokenID:  f.leafJTI,
 		Tool:     tool,
 		Args:     args,

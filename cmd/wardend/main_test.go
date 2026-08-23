@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/igorkg/warden/internal/aat"
+	"github.com/igorkg/warden/internal/aat/aattest"
 	"github.com/igorkg/warden/internal/audit"
+	"github.com/igorkg/warden/internal/proxy"
 	"github.com/igorkg/warden/internal/testserver"
 )
 
@@ -114,9 +117,29 @@ type proxied struct {
 	wait     func(t *testing.T)
 }
 
-// proxiedServer runs wardend's own entry point over pipes, with the upstream
-// spawned exactly as it would be in production.
+// proxiedServer runs wardend in passthrough: the unenforced control.
 func proxiedServer(t *testing.T) *proxied {
+	t.Helper()
+	return wardend(t, "-passthrough-only")
+}
+
+// enforcingServer runs wardend enforcing against f's trust anchor, with the
+// upstream spawned exactly as it would be in production.
+func enforcingServer(t *testing.T, f *aattest.Fixture) *proxied {
+	t.Helper()
+	anchors := t.TempDir() + "/anchors.json"
+	b, err := json.Marshal([]*aat.JWK{f.Anchor})
+	if err != nil {
+		t.Fatalf("marshal anchors: %v", err)
+	}
+	if err := os.WriteFile(anchors, b, 0o600); err != nil {
+		t.Fatalf("write anchors: %v", err)
+	}
+	return wardend(t, "-trust-anchors", anchors)
+}
+
+// wardend runs wardend's own entry point over pipes with the given flags.
+func wardend(t *testing.T, flags ...string) *proxied {
 	t.Helper()
 	t.Setenv("WARDEN_TEST_ROLE", "server") // inherited by the upstream wardend spawns
 
@@ -125,9 +148,12 @@ func proxiedServer(t *testing.T) *proxied {
 	stderr := &syncBuf{}
 	logPath := t.TempDir() + "/audit.jsonl"
 
+	args := append([]string{"-audit", logPath}, flags...)
+	args = append(args, os.Args[0])
+
 	done := make(chan error, 1)
 	go func() {
-		err := run([]string{"-audit", logPath, "-passthrough-only", os.Args[0]}, clientR, outW, stderr)
+		err := run(args, clientR, outW, stderr)
 		outW.Close()
 		done <- err
 	}()
@@ -307,4 +333,238 @@ func nearestRank(v []int64, p float64) int64 {
 		r = len(s) - 1
 	}
 	return s[r]
+}
+
+// --- the enforcing e2e -----------------------------------------------------
+
+// boundCall renders a tools/call carrying the §3.1 binding for f.
+func boundCall(t *testing.T, f *aattest.Fixture, id int, tool string, args map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      tool,
+			"arguments": args,
+			"_meta":     f.Meta(t, tool, args),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	return string(b)
+}
+
+// TestEnforcingE2EPermits is the milestone's exit criterion: a three-token
+// chain authorizes a permitted call end to end through the proxy, against a
+// real upstream process, and the client gets the upstream's own answer.
+func TestEnforcingE2EPermits(t *testing.T) {
+	f := aattest.NewLive(t, 3)
+	p := enforcingServer(t, f)
+	converse(t, p.c) // handshake, as a real client would
+
+	got := p.c.call(t, boundCall(t, f, 10, aattest.Echo, aattest.EchoAllowed))
+	if !strings.Contains(got, "echo: hello") {
+		t.Fatalf("response = %s, want the upstream's echo", got)
+	}
+	p.closeIn()
+	p.wait(t)
+
+	recs := readAudit(t, p.auditLog)
+	var permits int
+	for _, r := range recs {
+		if r.Decision == audit.DecisionPermit {
+			permits++
+			if r.Chain.Depth == nil || *r.Chain.Depth != 2 || r.Chain.Tokens != 3 {
+				t.Errorf("permit record does not describe the chain: %+v", r.Chain)
+			}
+			if r.PoP.JTI == "" {
+				t.Errorf("permit record names no PoP: %+v", r.PoP)
+			}
+		}
+	}
+	if permits != 1 {
+		t.Fatalf("want exactly one permit, got %d in %d records", permits, len(recs))
+	}
+}
+
+// TestEnforcingE2EDenies is the other half: an out-of-authority call, an error
+// the client can parse, an upstream that never saw it, and an audit trace that
+// names the clause.
+//
+// The upstream implements echo for any text, so if the call reached it the
+// client would receive "echo: goodbye". That the client receives an error
+// instead is the enforcement, not a coincidence of the fixture.
+func TestEnforcingE2EDenies(t *testing.T) {
+	f := aattest.NewLive(t, 3)
+	p := enforcingServer(t, f)
+	converse(t, p.c)
+
+	got := p.c.call(t, boundCall(t, f, 11, aattest.Echo, aattest.EchoDenied))
+	if strings.Contains(got, "goodbye") {
+		t.Fatalf("the call reached the upstream: %s", got)
+	}
+
+	var resp struct {
+		ID    int `json:"id"`
+		Error *struct {
+			Code    int               `json:"code"`
+			Message string            `json:"message"`
+			Data    map[string]string `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("the client did not receive valid JSON-RPC: %v (%s)", err, got)
+	}
+	if resp.Error == nil || resp.Error.Code != proxy.ErrCodeDenied || resp.ID != 11 {
+		t.Fatalf("response = %s, want a -32001 error correlated to id 11", got)
+	}
+	if resp.Error.Data["ref"] == "" {
+		t.Fatalf("the denial names no clause: %s", got)
+	}
+
+	// The proxy is still usable afterwards. A denial is a decision about one
+	// call, not a reason to tear down the session.
+	if ok := p.c.call(t, boundCall(t, f, 12, aattest.Echo, aattest.EchoAllowed)); !strings.Contains(ok, "echo: hello") {
+		t.Fatalf("the session did not survive the denial: %s", ok)
+	}
+
+	p.closeIn()
+	p.wait(t)
+
+	recs := readAudit(t, p.auditLog)
+	var deny *audit.Record
+	for i := range recs {
+		if recs[i].Decision == audit.DecisionDeny {
+			deny = &recs[i]
+		}
+	}
+	if deny == nil {
+		t.Fatalf("no deny record in %d records", len(recs))
+	}
+	last := deny.Trace[len(deny.Trace)-1]
+	if last.Outcome != "deny" || last.Ref == "" {
+		t.Fatalf("the trace does not end at a cited refusal: %+v", deny.Trace)
+	}
+	if !strings.Contains(last.Ref, "§3.4") || !strings.Contains(last.Detail, "text") {
+		t.Errorf("trace step = %+v, want the §3.4 constraint on the text argument", last)
+	}
+	if resp.Error.Data["ref"] != last.Ref {
+		t.Errorf("the client saw ref %q and the audit recorded %q", resp.Error.Data["ref"], last.Ref)
+	}
+	if deny.Chain.RootJTI == "" || deny.Chain.LeafJTI == "" {
+		t.Errorf("the deny record cannot say which chain produced it: %+v", deny.Chain)
+	}
+}
+
+// TestEnforcingRefusesUnboundCalls: a tools/call with no _meta at all is denied
+// fail-closed. There is no unauthenticated path through an enforcing wardend.
+func TestEnforcingRefusesUnboundCalls(t *testing.T) {
+	f := aattest.NewLive(t, 3)
+	p := enforcingServer(t, f)
+	converse(t, p.c)
+
+	got := p.c.call(t, `{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`)
+	if strings.Contains(got, "echo: hello") {
+		t.Fatalf("an unbound call was served: %s", got)
+	}
+	if !strings.Contains(got, "ARCHITECTURE") {
+		t.Errorf("response = %s, want a denial citing the transport binding", got)
+	}
+	p.closeIn()
+	p.wait(t)
+}
+
+// TestEnforcingRequiresTrustAnchors: wardend refuses to start rather than
+// denying every call for a reason that looks like the client's fault.
+func TestEnforcingRequiresTrustAnchors(t *testing.T) {
+	err := run([]string{"-audit", "-", os.Args[0]}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("enforcing wardend started with no -trust-anchors")
+	}
+	if !strings.Contains(err.Error(), "trust-anchors") {
+		t.Errorf("error = %v, want one naming the missing flag", err)
+	}
+
+	// And the two modes cannot be combined, since one of them was meant and
+	// it is not knowable which.
+	err = run([]string{"-audit", "-", "-passthrough-only", "-trust-anchors", "/dev/null", os.Args[0]},
+		strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("wardend accepted -trust-anchors together with -passthrough-only")
+	}
+}
+
+// --- the number that means something ---------------------------------------
+
+// TestEnforcementLatency reports passthrough against enforcing at three chain
+// depths on the same binary.
+//
+// Read the absolute microseconds, not the ratio. internal/testserver answers in
+// about 20µs, so any overhead expressed as a percentage of it is a statement
+// about how trivial the peer is, not about warden. Against a real MCP server
+// doing real work the same absolute cost would render as a flattering fraction
+// that says nothing.
+//
+// Depth is broken out because §7 verifies one Ed25519 signature per token, so
+// the cost is linear in chain length and a single number would be a number for
+// one topology.
+func TestEnforcementLatency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("latency measurement")
+	}
+	const n = 300
+
+	measure := func(t *testing.T, p *proxied, call func(i int) string) (tot, up, over []int64) {
+		t.Helper()
+		converse(t, p.c)
+		for i := 0; i < n; i++ {
+			got := p.c.call(t, call(i))
+			if !strings.Contains(got, "echo: hello") {
+				t.Fatalf("call %d did not succeed: %s", i, got)
+			}
+		}
+		p.closeIn()
+		p.wait(t)
+		for _, r := range readAudit(t, p.auditLog) {
+			if r.Request.Tool != aattest.Echo {
+				continue
+			}
+			tot = append(tot, r.LatencyUS)
+			up = append(up, r.UpstreamUS)
+			over = append(over, r.OverheadUS)
+		}
+		// converse's own handshake ends with an echo, so keep the tail.
+		if len(tot) < n {
+			t.Fatalf("measured %d calls, want at least %d", len(tot), n)
+		}
+		return tot[len(tot)-n:], up[len(up)-n:], over[len(over)-n:]
+	}
+
+	report := func(label string, tot, up, over []int64) {
+		t.Logf("%-20s  total p50 %5d p99 %6d | upstream p50 %5d | overhead p50 %5d p99 %6d",
+			label, p50(tot), p99(tot), p50(up), p50(over), p99(over))
+	}
+
+	t.Logf("all figures in microseconds, nearest-rank, over %d tools/call each", n)
+	t.Logf("%-20s  %s", "", "overhead = total - upstream, i.e. what warden added")
+
+	// The control: the same binary, deciding nothing.
+	baseTot, baseUp, baseOver := measure(t, proxiedServer(t), func(i int) string {
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`, 100+i)
+	})
+	report("passthrough", baseTot, baseUp, baseOver)
+
+	for _, depth := range []int{1, 3, 5} {
+		f := aattest.NewLive(t, depth)
+		tot, up, over := measure(t, enforcingServer(t, f), func(i int) string {
+			return boundCall(t, f, 100+i, aattest.Echo, aattest.EchoAllowed)
+		})
+		report(fmt.Sprintf("enforcing depth %d", depth), tot, up, over)
+		t.Logf("%-20s  enforcement cost over the control: p50 %+dµs  p99 %+dµs",
+			"", p50(over)-p50(baseOver), p99(over)-p99(baseOver))
+	}
+	t.Logf("the upstream answers in p50 %dµs, so overhead as a percentage of it "+
+		"is a statement about the peer, not about warden", p50(baseUp))
 }
