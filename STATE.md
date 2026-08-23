@@ -1,25 +1,32 @@
 # warden — STATE
 
-Updated: 2026-08-22 (M0b1 closed)
+Updated: 2026-08-23 (M0b2 closed)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
-to start M0b without re-exploring the repo.
+to start M1 without re-exploring the repo.
 
 ## Current position
 
-**M0a is complete and committed. M0b1 (constraint vocabulary) is complete.**
-M0b2 has not started.
+**M0a, M0b1 and M0b2 are complete.** M1 has not started.
 
-M0a was encoding and crypto only. Everything in `internal/aat` is
-**single-token**: a token's own claims, its own signature, its own shape.
+M0a was encoding and crypto only: a token's own claims, its own signature, its
+own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
+`check`, the §4.5 `subsumes` matrix, the §3.5.1 soundness property — all of it
+single-constraint and single-pair.
 
-M0b1 added `internal/core`: the nine §3.4 constraint types with `check`, the
-§4.5 `subsumes` matrix, and the §3.5.1 soundness property test. It is
-**single-constraint and single-pair**: one constraint against one argument
-value, one derived constraint against one parent constraint. **There is still
-no chain logic anywhere in the tree** — nothing walks a token list, nothing
-implements §7, nothing verifies a PoP against a chain. That is M0b2.
+M0b2 added chains, and it is the milestone that made the previous two do
+something. `core` gained the §3.3 capability structure, the §7 step 6b
+invocation check, and the domain invariants I1–I4 over a domain-typed token.
+`aat` gained `Verifier`, which runs the §7 eight-step algorithm end to end:
+size check, cycle detection, root anchoring, per-link verification, capability
+projection, invocation authorization, PoP. `core.Subsumes` finally has a
+caller — §7 step 4p4.
+
+**The library is feature-complete for offline chain verification.** What does
+not exist is everything above it: no proxy, no MCP, no audit log, no policy
+file, no key management, no revocation, no interop test against another
+implementation. That is M1 onward.
 
 ---
 
@@ -33,7 +40,7 @@ docs/ref/NOTES.md                           spec ambiguities found while impleme
 internal/aat/jcs/                            RFC 8785 JSON canonicalization
 internal/aat/jws/                            RFC 7515 compact serialization, Ed25519 only
 internal/aat/                                AAT claim set, JWK/thumbprints, PoP JWT
-internal/core/                               §3.4 constraints: check, §4.5 subsumes
+internal/core/                               domain: §3.4 constraints, §3.3 capabilities, I1-I4
 ```
 
 **All section citations (§x.y) resolve against the vendored draft**, never
@@ -58,13 +65,19 @@ retention of the exact signing input. Knows nothing about AAT claims.
 **`internal/aat`** — draft §3.2 claim set, RFC 7638 thumbprint + RFC 9278
 thumbprint URI, §4.6 `par_hash`, §5.2 PoP JWT, §7 steps 3a/4a/7a algorithm/key
 consistency, §7 steps 3l/4b2 private-key-material rejection, §4.3.1
-`MAX_TOKEN_SIZE`. Knows nothing about constraint semantics or chains.
+`MAX_TOKEN_SIZE`. Since M0b2 it also owns the **§7 step sequence**
+(`Verifier`), I5 cryptographic linkage (`par_hash` over the parent's signing
+input), I6 proof of possession, and §4.3.1 `MAX_STACK_SIZE`. It knows no
+constraint semantics: every domain invariant is a call into `core`.
 
 **`internal/core`** — the domain layer, stdlib-only, no wire format. Owns the
 §3.4 argument-constraint vocabulary (nine types, `Check`), the §4.5 subsumption
-matrix (`Subsumes`), and §3.4 `MAX_CONSTRAINT_DEPTH`. Knows nothing about JWTs,
-`authorization_details`, or chains. `ParseConstraint` takes the raw JSON of one
-constraint object and is the only producer of validated `Constraint` values.
+matrix (`Subsumes`), §3.4 `MAX_CONSTRAINT_DEPTH`, and — since M0b2 — the §3.3
+capability structure (`Capabilities`, `ConstraintMap`), the §7 step 6b
+invocation check, and the domain invariants I1–I4 over a domain-typed `Token`.
+Knows nothing about JWTs, base64, or signatures. `ParseCapabilities` takes the
+already-decoded `authorization_details` array elements as raw JSON — the outer
+JWT is `aat`'s problem, the entries' meaning is `core`'s.
 
 The **subsumption matrix is a table of PERMITTED (parent type, derived type)
 pairs**, 19 of the 81 core pairs. There is no default branch and no list of
@@ -127,6 +140,29 @@ func (p *PoP) Payload() []byte
 func (p *PoP) SigningInput() []byte
 ```
 
+Added by M0b2 — the §7 orchestrator:
+
+```go
+const DefaultMaxStackSize = 262144   // §4.3.1 RECOMMENDED MAX_STACK_SIZE
+const DefaultPoPSkew      = 30       // §5.3 RECOMMENDED PoP clock tolerance, seconds
+var   MaxStackSize        = DefaultMaxStackSize   // operator config, set once at startup
+
+type Verifier struct {
+        TrustAnchors []*JWK        // §7 step 3b; empty means nothing verifies
+        Limits       core.Limits   // §4.3/§4.4 bounds; the zero value is rejected
+        PoPSkew      int64         // seconds; 0 is rejected, use DefaultPoPSkew
+        Audience     string        // non-empty => §7 step 7d aat_aud binding is required
+        Now          func() int64  // nil = time.Now, for tests
+}
+
+func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJWT string) error
+```
+
+`Verify` is the whole of §7: `chain[0]` is the root, `chain[len-1]` the leaf,
+and a nil return is step 8 PERMIT. It returns one error naming the step and
+invariant that denied — the errors are for operators reading an audit log, not
+for a remote peer.
+
 Four things a caller must know before using this:
 
 1. **`Parse` does not verify.** A `*Token` from `Parse` is structurally valid
@@ -134,7 +170,8 @@ Four things a caller must know before using this:
    unverified payload, so `Parse` runs on attacker-controlled bytes by design.
 2. **`Verify` is single-token.** Signature plus algorithm/key consistency. It
    does not walk a chain, check I1–I5, or evaluate constraints. *Choosing* the
-   key is chain verification's job and does not exist yet.
+   key is `Verifier`'s job: a trust anchor for the root, the parent's
+   `cnf.jwk` for every other token.
 3. **`Verify` takes a `*JWK`, not an `ed25519.PublicKey`.** That is what makes
    the §7 alg↔`kty`/`crv` check representable at all — a raw Ed25519 key cannot
    express the mismatch the check exists to catch. The check runs *before*
@@ -162,6 +199,50 @@ func (c *Constraint) Check(v any) bool            // §3.4 check predicate
 func Subsumes(derived, parent *Constraint) bool   // §4.5, sound and conservative
 ```
 
+Added by M0b2 — capabilities and the domain invariants:
+
+```go
+const CapabilityType = "attenuating_agent_token"   // §3.3
+
+type ConstraintMap map[string]*Constraint          // argument name -> constraint
+type Capabilities  struct{ Tools map[string]ConstraintMap }
+
+func ParseCapabilities(details []json.RawMessage) (*Capabilities, error)  // §3.3
+func CheckI4(child, parent *Capabilities) error                           // §7 step 4p
+func (c *Capabilities) CheckInvocation(tool string, args map[string]any) error  // §7 step 6b
+
+type Token struct{ JTI, Issuer string; IssuedAt, Expires int64;
+                   Depth, MaxDepth int; HolderKeyURI string; Caps *Capabilities }
+type Limits struct{ MaxDelegationDepth int; MaxIATSkew, MaxTokenLifetime int64 }
+var  DefaultLimits = Limits{MaxDelegationDepth: 8, MaxIATSkew: 30, MaxTokenLifetime: 7776000}
+
+func CheckRoot(root *Token, now int64, lim Limits) error           // §7 steps 3c, 3e-3k, 3m
+func CheckLink(parent, child *Token, now int64, lim Limits) error  // §7 steps 4c-4p, I1-I4
+```
+
+Four more things a caller must know:
+
+4. **A nil `*Capabilities` is the empty capability set, not an error.** §7 step
+   4n defines a token with no `attenuating_agent_token` entry as one with an
+   empty `tools` map, and the methods are nil-safe so that definition lives in
+   one place instead of at every call site. A non-leaf derived token MAY carry
+   zero entries; §3.3 requires exactly one in a root and in a leaf, and
+   `Verifier` enforces the leaf half because leaf-ness is only knowable there.
+5. **`Token.HolderKeyURI` is computed by the wire layer**, not stored in the
+   token. It is `jwk_thumbprint_uri(cnf.jwk)` of *that* token, and I1 is the
+   one-line check `child.Issuer == parent.HolderKeyURI`. Putting the URI in the
+   projection is what keeps thumbprinting — base64, SHA-256, JSON — out of
+   `core`.
+6. **`Limits` has no usable zero value.** `MaxDelegationDepth: 0` would deny
+   every chain and `MaxIATSkew: 0` would deny every clock, so `check` rejects
+   the zero value rather than silently enforcing it. `DefaultLimits` is a
+   deployment default, not a draft-mandated one: Appendix B.4 declines to
+   recommend a `MAX_DELEGATION_DEPTH`, so 8 is ours.
+7. **`CheckI4` is not `Subsumes` lifted over maps.** Three of its four rules
+   are about *key sets*, not constraints: 4p1 tool subset, 4p2 exact key-set
+   equality when the parent map is non-empty, 4p3 any key set when it is empty.
+   Only 4p4 calls `Subsumes`. See the M0b2 trap note below.
+
 Three things a caller must know:
 
 1. **`Subsumes` is sound, not complete.** True means: for every argument value
@@ -179,6 +260,112 @@ Three things a caller must know:
    identification RFC 8785 makes upstream.
 
 ---
+
+## M0b2 exit state
+
+| Criterion | Status |
+|---|---|
+| A three-token chain mints and verifies end to end including PoP | met — `TestChainVerifies` (`internal/aat/chain_test.go`) |
+| Each of I1–I6 has a test that violates it and asserts denial | met — 11 denial tests, listed below |
+| The chain-soundness property green, with a run count | met — 20,000 rapid checks, see below |
+| The property mutation-checked | met — detected after 123 tests, recipe below |
+| §3.3 capability parsing, structural rules enforced | met — `ParseCapabilities`, `TestDenyTwoCapabilityEntries`, `TestOtherAuthorizationDetailsTypesAreIgnored` |
+| §5.3 PoP including step 7f canonical `args` comparison | met — `sameCanonicalArgs`, `TestPoPArgumentComparisonIsCanonical` |
+
+`go test ./internal/...`: **349 pass, 0 fail, 0 skip** (79 in `core`, 130 in
+`aat`). `go vet ./...` clean.
+
+The I1–I6 denial tests, all in `internal/aat/chain_test.go`:
+
+```
+I1  TestDenyI1IssuerMismatch        child iss is not the parent holder key's thumbprint URI
+    TestDenyI1SignedByStranger      correct iss, signature by a key that is not the parent's
+I2  TestDenyI2DepthSkip             del_depth jumps by two
+    TestDenyI2RaisedCeiling         child raises del_max_depth above its parent's
+I3  TestDenyI3ChildOutlivesParent   child exp > parent exp
+    TestDenyI3ChildPredatesParent   child iat < parent iat
+I4  TestDenyI4AddsTool              4p1
+    TestDenyI4WidensConstraint      4p4, via core.Subsumes
+    TestDenyI4DropsConstrainedKey   4p2, key set smaller
+    TestDenyI4AddsConstrainedKey    4p2, key set larger
+I5  TestDenyI5WrongParentHash       par_hash of a sibling parent, everything else valid
+I6  TestDenyI6PoPSignedByStranger   PoP not signed by the leaf holder key
+```
+
+Plus `TestPermitI4OpenWorldParentGainsKeys`, which is 4p3 and must *pass* —
+without it, a single subset check satisfies every 4p2 test above and the trap
+closes silently.
+
+### The chain-soundness property
+
+`TestChainAttenuationIsSound` (`internal/core/chainsound_test.go`) is the
+milestone's second property:
+
+> for all chains C₀ … Cₙ where `CheckI4(Cᵢ₊₁, Cᵢ) == nil` at every link, and
+> all invocations (tool, args): `Cₙ.CheckInvocation` permits ⟹ `C₀.CheckInvocation` permits.
+
+It is the whole-chain statement that I4 plus §7 step 6b compose. `Subsumes`'s
+soundness is pairwise and per-argument; this one says no *sequence* of valid
+derivations reaches a leaf that authorizes something the root would deny.
+
+`-rapid.checks=20000`: **20,001 chains drawn, 7,923 valid, 2,286 leaf-authorized
+invocations checked against the root.** 0.47s. At the default 100 checks: 101
+drawn, 32 valid, 10 authorized.
+
+Like the M0b1 properties it **fails if the authorized count is zero**. Blindly
+drawn argument values essentially never satisfy a drawn constraint, which makes
+the implication hold for want of an antecedent; `genSatisfying` draws values the
+leaf's constraint is likely to accept (one draw in five ignores it, so the wild
+shapes stay reachable) and raised the authorized rate about 16×. It is a
+generator of candidates, never an oracle — `CheckInvocation` still decides.
+
+**The mutation check is part of the test contract here too.** Collapsing 4p2
+into a subset check — the exact trap this milestone was warned about — MUST make
+the property fail:
+
+```
+# internal/core/capability.go, in CheckI4:
+#   change  if len(childMap) != len(parentMap) {
+#   to      if len(childMap) <  len(parentMap) {
+go test ./internal/core/ -run TestChainAttenuationIsSound -rapid.checks=2000   # MUST fail
+```
+
+As of M0b2 it fails after 123 tests and shrinks to a root of
+`{read_file:{path=not_one_of{}}}` against a leaf that has added an `extra`
+argument the root's closed-world map never named. Re-run it by hand after any
+change to `genCapabilities`, `genDerivation`, `genInvocation`, or
+`genSatisfying`.
+
+### Two findings from implementing §7
+
+**Step 5 is unreachable.** It checks `len(chain) == leaf.del_depth + 1`, but
+step 3c pins the root's `del_depth` at 0 and step 4d requires each child to
+increment by exactly one, so by the time step 5 runs the equality is already
+guaranteed. The draft labels it "(Defense in depth)" and that is exactly what it
+is; the check is still implemented. Its corollary — **any prefix of a valid
+chain is itself a valid chain**, and containment of the wider prefix authority
+rests entirely on PoP — is `docs/ref/NOTES.md` #6, and an M4 adversarial
+scenario. `TestChainPrefixIsItselfAValidChain` asserts the acceptance rather
+than leaving it emergent and untested.
+
+**Ordering is load-bearing and now pinned.** §5.3 completes chain verification
+(steps 1–6) before evaluating the PoP, so a valid PoP over an invalid chain must
+not authorize. `TestPoPDoesNotRescueAnInvalidChain` mints an impeccable PoP over
+an I4-broken chain and asserts the error names I4, not the PoP. Without the
+assertion on *which* error, an implementation that evaluates the PoP first still
+passes every other test in the file.
+
+Two implementation notes on the traps STATE.md recorded before the milestone:
+
+- Step 2c's pre-verification parse is `extractJTI`, which splits on `.`,
+  base64url-decodes segment 1, and unmarshals into a struct with exactly one
+  field. It cannot read `del_depth` or `exp` because there is nowhere for them
+  to go. Its result feeds only the duplicate-detection set. `verifyThenParse`
+  is the ordinary path: `jws.Parse` (header only, payload stays bytes) →
+  algorithm/key consistency → `ed25519.Verify` → `aat.Parse`.
+- Step 7f never compares raw JSON or decoded maps. `sameCanonicalArgs` reads
+  the raw `hta` member out of the PoP payload, canonicalizes it, canonicalizes
+  `json.Marshal(args)` independently, and compares the two JCS byte strings.
 
 ## M0b1 exit state
 
@@ -313,13 +500,15 @@ Zero dependencies. `go.mod` has no `require` block; `go 1.24`.
 
 ---
 
-## Layout decision, settled before M0b2 writes any chain code
+## Layout decision, settled before M0b2 and unchanged by it
 
 **The import direction is `aat → core`, strictly one-way. `core` imports stdlib
 only and must never import `aat`, `jws`, or `jcs`.** This is what ARCHITECTURE §7
 already says ("`internal/aat` imports `core`; `core` speaks domain types"); it is
-written here because M0b2 is the first milestone where a careless call site turns
-it into an import cycle in the middle of the §7 algorithm.
+written here because M0b2 was the first milestone where a careless call site turns
+it into an import cycle in the middle of the §7 algorithm. **It held**: `core`
+still imports stdlib only, and the reviewer's test at the end of this section is
+what kept `ParseCapabilities` and `HolderKeyURI` on the right sides of the line.
 
 The drift ARCHITECTURE leaves open is *where §7 itself lives*: it assigns "the §7
 verification algorithm" to `aat` and "chain, decision" to `core`. Resolution:
@@ -342,42 +531,15 @@ signing inputs), and the attenuation semantics are in `core` because they are
 not. A reviewer's test: if a function in `core` needs a base64url segment or a
 signature, it is in the wrong package.
 
-## Next 3 tasks (M0b2)
+## Next 3 tasks
 
-1. **M0b2 — chains.** The §7 eight-step chain verification algorithm, §5.3 PoP
-   verification, the I1–I5 invariants as a whole, and the chain-soundness
-   property test. This is where `authorization_details` gets parsed into
-   capabilities and where `core.Subsumes` acquires its caller — M0b1 built the
-   relation, nothing calls it yet. Two things already identified and
-   deliberately left for this milestone:
-   - **§3.3: root and leaf tokens MUST contain exactly one
-     `attenuating_agent_token` entry.** Checkable for roots today, but
-     leaf-ness is not single-token knowable, and it needs
-     `authorization_details` parsed rather than opaque. Not half-built in M0a.
-   - **§4.4 (I3) `derived.iat >= parent.iat`** and the rest of I1–I5, all
-     pair-quantified and therefore absent from `validate`. The one line of I2
-     that *is* single-token quantified (`del_depth <= del_max_depth`) is
-     already enforced.
-
-   **Two steps of §7 that are easy to get subtly wrong. Read these before
-   writing the algorithm, not after a review finds them:**
-
-   - **Step 2c extracts `jti` before signature verification, for cycle
-     detection. That is the ONLY permitted pre-verification parse**, and the
-     values it extracts MUST be treated as untrusted until that token's
-     signature verifies. Everything else parses after. The failure mode is
-     quiet: a second "while we're in here" pre-parse of `del_depth` or `exp`
-     reads attacker-controlled numbers into the algorithm's control flow, and
-     no test that only feeds it valid chains will ever notice.
-   - **Steps 4p2 and 4p3 are different rules and must not be collapsed.**
-     4p2 requires **exact key-set equality** when the parent's argument-constraint
-     map is non-empty; 4p3 allows **any key set** when it is empty. Writing one
-     subset check that happens to satisfy both on the test fixtures is the
-     natural mistake, and it silently admits derived tokens that constrain a
-     different argument set than the parent did.
-
-   Exit: a three-token chain mints, verifies end to end including PoP, and each
-   of I1–I6 has a test that violates it and asserts denial.
+1. **M1 — MCP proxy passthrough + audit**, log-only mode. The first code above
+   the library: an MCP proxy that sees every tool invocation, resolves the
+   presented chain and PoP through `aat.Verifier`, and **logs the decision
+   without enforcing it**. Log-only is the point — it is how a deployment finds
+   out that warden denies a call some real agent makes, before a denial breaks
+   anything. Expect the first findings to be NOTES.md #5 shaped: legitimate
+   attenuations across a (derived, parent) type pair §4.5 never declared.
 
 2. **Interop with the Tenuo reference implementation**
    (`github.com/tenuo-ai/tenuo`, draft Appendix E) as a test target: a
@@ -387,13 +549,24 @@ signature, it is in the wrong package.
    primitives against published bytes; they say nothing about whether our
    reading of the *draft* matches anyone else's. Every ambiguity in
    `docs/ref/NOTES.md` is a place where this test can fail while both sides are
-   conformant — which is exactly what makes it worth running.
+   conformant — which is exactly what makes it worth running. Now that a chain
+   verifies end to end, this is finally runnable.
 
 3. **Fold the vendored draft back into ADR 0001.** The four issues below, plus
    the §10.3.1 finding from the previous pass, are now resolvable against real
    text rather than against our own quotation. Scheduled for the M2 pass.
 
-Then: **M1 — MCP proxy passthrough + audit** in log-only mode.
+Deferred out of M0b2 on purpose, none of it blocking M1:
+
+- **Revocation (§8.9) and `jti` replay caching.** `Verifier` detects a repeated
+  `jti` *within one presented chain* (step 2c cycle detection) and nothing
+  more. Cross-request replay needs state, and state needs a deployment.
+- **`invocation_constraints` (ADR 0001).** `aat.Parse` ignores unrecognized
+  claims and does not preserve them; a reader belongs with the proxy that has
+  something to enforce them against.
+- **Key management.** `Verifier.TrustAnchors` is a slice a caller populates. No
+  loading, no rotation, no expiry.
+
 
 ---
 
