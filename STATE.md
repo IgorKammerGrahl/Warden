@@ -359,6 +359,26 @@ signature, it is in the wrong package.
      that *is* single-token quantified (`del_depth <= del_max_depth`) is
      already enforced.
 
+   **Two steps of §7 that are easy to get subtly wrong. Read these before
+   writing the algorithm, not after a review finds them:**
+
+   - **Step 2c extracts `jti` before signature verification, for cycle
+     detection. That is the ONLY permitted pre-verification parse**, and the
+     values it extracts MUST be treated as untrusted until that token's
+     signature verifies. Everything else parses after. The failure mode is
+     quiet: a second "while we're in here" pre-parse of `del_depth` or `exp`
+     reads attacker-controlled numbers into the algorithm's control flow, and
+     no test that only feeds it valid chains will ever notice.
+   - **Steps 4p2 and 4p3 are different rules and must not be collapsed.**
+     4p2 requires **exact key-set equality** when the parent's argument-constraint
+     map is non-empty; 4p3 allows **any key set** when it is empty. Writing one
+     subset check that happens to satisfy both on the test fixtures is the
+     natural mistake, and it silently admits derived tokens that constrain a
+     different argument set than the parent did.
+
+   Exit: a three-token chain mints, verifies end to end including PoP, and each
+   of I1–I6 has a test that violates it and asserts denial.
+
 2. **Interop with the Tenuo reference implementation**
    (`github.com/tenuo-ai/tenuo`, draft Appendix E) as a test target: a
    warden-minted chain must verify there, and a tenuo-minted chain must verify
