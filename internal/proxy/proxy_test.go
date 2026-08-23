@@ -135,7 +135,11 @@ type rig struct {
 	done      chan error
 }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T) *rig { return newRigWith(t, nil) }
+
+// newRigWith builds a rig in passthrough when enforce is nil and enforcing
+// otherwise, so a test can drive the same relay in either mode.
+func newRigWith(t *testing.T, enforce *Enforcer) *rig {
 	t.Helper()
 	clientR, clientW := io.Pipe()
 	srvR, srvW := io.Pipe()
@@ -159,7 +163,8 @@ func newRig(t *testing.T) *rig {
 		ServerOut:       upR,
 		Audit:           r.aw,
 		Log:             log.New(r.stderr, "", 0),
-		PassthroughOnly: true,
+		PassthroughOnly: enforce == nil,
+		Enforce:         enforce,
 	}
 	go func() { r.done <- p.Run() }()
 	return r
@@ -218,11 +223,21 @@ func (r *rig) records(t *testing.T) []audit.Record {
 
 // --- tests ----------------------------------------------------------------
 
-func TestPassthroughOnlyIsRequired(t *testing.T) {
-	p := &Proxy{ClientIn: strings.NewReader(""), ClientOut: io.Discard,
-		ServerIn: io.Discard, ServerOut: strings.NewReader("")}
+// Exactly one mode. Neither would relay unauthorized calls; both would make a
+// flag that can mean either silently mean neither.
+func TestExactlyOneModeIsRequired(t *testing.T) {
+	newProxy := func() *Proxy {
+		return &Proxy{ClientIn: strings.NewReader(""), ClientOut: io.Discard,
+			ServerIn: io.Discard, ServerOut: strings.NewReader("")}
+	}
+	if err := newProxy().Run(); err == nil {
+		t.Error("Run with neither mode set must refuse to start")
+	}
+	p := newProxy()
+	p.PassthroughOnly = true
+	p.Enforce = &Enforcer{}
 	if err := p.Run(); err == nil {
-		t.Fatal("Run with PassthroughOnly=false must refuse to start")
+		t.Error("Run with both modes set must refuse to start")
 	}
 }
 
