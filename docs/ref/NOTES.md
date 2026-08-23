@@ -277,6 +277,24 @@ interop failure attributable: a mismatch against another AAT implementation is
 then a disagreement about the protocol, not about a policy we baked into a
 primitive.
 
+**Addendum, M3.** The same collapse applies to constraint *literals*, not only
+to invocation arguments, and warden is now the party producing them. §6 mints a
+child token whose `authorization_details` carries §3.4 constraint objects, and
+an AAT payload is JCS-canonicalized before it is signed (§3.1) — so a `range`
+bound of `9007199254740993` is signed as `9007199254740992`. The token then
+constrains something its issuer did not ask for, and no holder or enforcement
+point downstream can tell, because the number they receive is the only one that
+was ever signed. `Deriver.Derive` runs `jcs.CheckNumbers` over the capability
+entry before signing and refuses; `TestDeriveRefusesAmbiguousConstraintNumbers`
+pins it.
+
+Refused at mint, deliberately not at verify. A collapsed literal in a token that
+arrives from elsewhere is a defect in that issuer's output, not an escalation —
+warden already refuses ambiguous arguments at bind, so nothing can exploit the
+collision from the invocation side. Adding a verify-time rejection would deny
+tokens another conforming implementation considers valid, which is an interop
+divergence and would need an ADR rather than a commit.
+
 **Worth raising.** Yes, and this is the strongest of these entries. The fix in
 the draft is one sentence in §5.2 or §7 — either "arguments MUST NOT contain
 numbers outside the range exactly representable per RFC 8785 §3.2.2.3" or
@@ -356,3 +374,61 @@ enforcement point that did not author its tools meant to obtain the
 irreversibility classification §8.5's MUST depends on? If the answer is "out of
 band, by configuration", the draft should say so, because the current text reads
 as though the enforcement point already knows.
+
+## 10. §8.9 asks for trust anchor rotation without downtime and offers nothing to build it with
+
+**What the draft says.** §8.9 puts per-token revocation outside the
+specification: "The offline delegation model trades per-token revocation
+granularity for verifiability without authorization server availability. This
+tradeoff is inherent in the verification model." What it offers instead is two
+things. Short lifetimes — "Deployments SHOULD use short token lifetimes to bound
+exposure after key compromise, token theft, or scope misconfiguration" — and
+anchor rotation: "Root trust anchor rotation (replacing the trust anchor signing
+key and re-issuing root tokens) is the appropriate response to a root key
+compromise. Enforcement points SHOULD support configurable trust anchor sets to
+enable rotation without downtime." §8.3 states the broader form of the same
+thing and is equally explicit that "the specific mechanism for root key
+revocation, including revocation list formats, distribution protocols, and
+enforcement point update procedures, is outside the scope of this
+specification."
+
+**What it leaves open.** The gap between the two halves of that last SHOULD.
+"Configurable trust anchor sets" is satisfied by a list on disk. "Without
+downtime" is not: it requires the anchor set to change while the enforcement
+point is running and deciding, which is a live mutation of the trust root in
+front of the authorization decision. The draft asks for that in a SHOULD and
+then declines to specify any of it — no signal, no transport, no ordering
+guarantee about in-flight requests, and no statement of what a verification
+concurrent with a rotation is entitled to observe. An implementation left to
+invent those answers is inventing revocation semantics, which is precisely what
+§8.3 and §8.9 say is out of scope.
+
+**What warden does.** The half that is specified. `-max-token-lifetime`
+(default 90 days, §4.4's RECOMMENDED upper bound) is a flag rather than a
+constant, because §8.9 makes it the only mitigation that exists for a stolen
+leaf; `-trust-anchors` already takes a set rather than a single key, so a
+rotation is a file edit. Applying that edit requires a restart. warden does not
+satisfy "without downtime" and does not claim to.
+
+Deliberately not built in M3. A SIGHUP reload is perhaps twenty lines, and the
+twenty lines are not the problem: swapping the trust root underneath a running
+verifier is a concurrency and failure-mode design (what happens to a chain
+mid-verification, whether a failed reload keeps the old set or denies
+everything, whether an operator can tell which set decided a given record) that
+belongs in its own pass with its own ADR. Shipping it as a side item of a
+delegation milestone would put the least-reviewed code in the tree directly in
+front of the authorization decision.
+
+Lineage-scoped cascading revocation — the thing that would actually make a
+delegation chain revocable — is named in §8.9 as future work: "A companion
+document may define lineage-scoped cascading revocation." warden will not invent
+it. Anything warden built here would be a private protocol wearing the draft's
+vocabulary, and the ROADMAP promise of "revoking the root lineage kills B's and
+C's mid-run" was written before that sentence was read; it has been corrected.
+
+**Worth raising.** Yes, narrowly: §8.9's "without downtime" is an unimplementable
+SHOULD as written. Either the draft should describe the minimum an enforcement
+point must guarantee during a rotation — most usefully, that a chain accepted at
+step 3 is decided against the anchor set it was accepted under — or it should
+soften to a MAY and leave the whole mechanism to the companion document, which
+is where the rest of revocation already lives.

@@ -156,17 +156,39 @@ lineage revocation; fail-closed on counter-state loss (D6).
   core nine can't express *and* a candidate language with decidable containment
   (Appendix C), or the answer stays no.
 
-## M3 — Delegation chains
+## M3 — Delegation chains — shipped 2026-08-23 (derivation), split
 
 Parent-derives-child across processes: agent A derives for agent B (B's own
-keypair, A never sees B's private key), depth limits enforced structurally by I2,
-lineage revocation, `wardenctl inspect` renders the full chain and the effective
-leaf authority.
+keypair, A never sees B's private key), depth limits enforced structurally by I2.
 
-- Demo: 3-hop chain A→B→C; C's capability is the intersection down the chain;
-  revoking the root lineage kills B's and C's mid-run.
-- Exit: depth cannot be bypassed by re-deriving or by re-parenting a subchain
-  (I2 + I5); lineage accounting holds under concurrent children (`-race`).
+`aat.Deriver` computes `iss`, `del_depth` and `par_hash` itself rather than
+accepting them, so I1, I2's increment and I5 are not fields a caller can get
+wrong, and refuses through `core.CheckLink` — the same function §7 step 4 runs at
+the enforcement point — so a derivation that would be denied is never signed.
+
+- Demo: 3-hop chain A→B→C; C's capability is the intersection down the chain.
+- Exit, met: a chain minted here verifies through the M2 proxy end to end
+  (`TestDerivedChainE2EPermits`); a subchain cannot be re-parented even between
+  siblings holding equal authority, because §6 step 7 hashes the parent's JWS
+  Signing Input (`TestDerivedTokenCannotBeReparented`); every I1–I6 violation is
+  refused at mint and the corresponding forged token is denied at verify
+  (`TestForgedLeafIsDeniedAtVerify`); a same-scope derivation permits and is
+  flagged on the audit record's `chain.same_scope`.
+
+**Dropped: lineage revocation.** It was scoped before §8.9 was read. The draft
+puts per-token revocation outside the specification, names short lifetimes and
+trust anchor rotation as what a deployment gets instead, and defers
+lineage-scoped cascading revocation to "a companion document" that does not
+exist. Building it would have meant inventing a private protocol under the
+draft's vocabulary. What shipped instead is `-max-token-lifetime` (§4.4, was a
+hardcoded 90 days). The unmet half of §8.9 — rotating the anchor set without a
+restart — is NOTES.md #10, and needs its own design pass: it is a live mutation
+of the trust root in front of the authorization decision, not a flag.
+
+**Still open, unchanged:** `wardenctl inspect`. And M2b, deferred again for the
+reason it was deferred the first time — `invocation_constraints`, budget, rate,
+counters and stateful replay tracking all sit on the four unresolved ADR 0001
+state issues, and those are a spec question before they are an implementation.
 
 ## M4 — Eval harness (the paper's data)
 

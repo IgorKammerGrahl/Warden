@@ -1,14 +1,14 @@
 # warden — STATE
 
-Updated: 2026-08-23 (M2 closed)
+Updated: 2026-08-23 (M3 closed — derivation; M3's revocation half dropped, see ROADMAP)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
-to start M3 without re-exploring the repo.
+to start M4 without re-exploring the repo.
 
 ## Current position
 
-**M0a, M0b1, M0b2, M1 and M2 are complete.** M3 has not started.
+**M0a, M0b1, M0b2, M1, M2 and M3 are complete.** M4 has not started.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -35,12 +35,20 @@ the audit record. `-passthrough-only` keeps M1's unenforced path alive on the
 same binary, which is what makes the overhead figure a measurement rather than
 a comparison of two builds.
 
-**warden enforces the stateless half of the draft.** What does not exist: no
-`invocation_constraints`, no budget or rate counters, no PoP `jti` replay set,
-no revocation, no policy file, no key rotation, no HTTP/SSE transport, no
-`wardenctl audit tail`, no interop test against another implementation. Every
-one of those is state, configuration or transport rather than a hole in the
-verification algorithm — the §7 path is complete and enforced.
+M3 made warden an issuer. `aat.Deriver` mints child tokens per §6, and it is the
+first code here that produces tokens rather than consuming them. The design
+decision is that it refuses through `core.CheckLink` — literally the function
+§7 step 4 runs at the enforcement point — so there is no second implementation
+of I1–I4 to drift from the first, and a derivation that would be denied on
+arrival is never signed.
+
+**warden enforces the stateless half of the draft, and can now extend a chain.**
+What does not exist: no `invocation_constraints`, no budget or rate counters, no
+PoP `jti` replay set, no revocation, no policy file, no live key rotation, no
+HTTP/SSE transport, no `wardenctl`, no interop test against another
+implementation. Every one of those is state, configuration or transport rather
+than a hole in the verification algorithm — the §7 path is complete and
+enforced, and §6 now runs forwards through it.
 
 ---
 
@@ -53,8 +61,8 @@ docs/ref/draft-...-01.txt                   vendored AAT draft-01
 docs/ref/NOTES.md                           spec ambiguities found while implementing
 internal/aat/jcs/                            RFC 8785 JSON canonicalization
 internal/aat/jws/                            RFC 7515 compact serialization, Ed25519 only
-internal/aat/                                AAT claim set, JWK/thumbprints, PoP JWT
-internal/core/                               domain: §3.4 constraints, §3.3 capabilities, I1-I4
+internal/aat/                                AAT claim set, JWK/thumbprints, PoP JWT, §7 verify, §6 derive
+internal/core/                               domain: §3.4 constraints, §3.3 capabilities, I1-I4, §6 same-scope
 internal/audit/                              the ARCHITECTURE §6 decision record, JSONL, latency stats
 internal/aat/aattest/                        shared chain fixture: one chain, minted the same way for every test
 internal/proxy/                              the relay (framing, correlation) and the §3.2 enforcement pipeline
@@ -175,6 +183,8 @@ type Verifier struct {
 }
 
 func (v *Verifier) Verify(chain []string, tool string, args map[string]any, popJWT string) error
+func (v *Verifier) VerifyReport(...) (Report, error)   // Verify + what it observed
+type Report struct{ SameScope []int }                  // §6 same-scope link positions; never a denial
 ```
 
 `Verify` is the whole of §7: `chain[0]` is the root, `chain[len-1]` the leaf,
@@ -199,6 +209,42 @@ Four things a caller must know before using this:
 4. **Unrecognized claims are ignored and not preserved.** A `Token` is never
    re-serialized; `Payload()`/`SigningInput()` return the bytes that were
    actually signed. A future `invocation_constraints` reader takes them there.
+
+Added by M3 — the §6 derivation API:
+
+```go
+type Derivation struct {
+        JTI                string                     // §6 step 1
+        IssuedAt, Expires  int64                      // §6 step 2 (I3)
+        HolderKey          *JWK                       // §6 step 8 (I6); the child holder's PUBLIC key
+        MaxDelegationDepth int                        // §6 step 6 (I2); == child del_depth means terminal
+        Tools              map[string]json.RawMessage // §6 steps 3-4 (I4); nil = authorize nothing
+}
+type Deriver struct {
+        Limits core.Limits   // same bounds the enforcement point uses
+        Now    func() int64  // nil = time.Now, for tests
+}
+
+func (dv *Deriver) Derive(parent *Token, signKey ed25519.PrivateKey, d Derivation) (*Token, error)
+```
+
+`Derivation` has no `iss`, no `del_depth` and no `par_hash` on purpose. §6
+computes all three, so `Derive` computes them too — from `signKey`, from the
+parent, and from the parent's JWS Signing Input respectively. A field a caller
+cannot set is an invariant a caller cannot violate, and those three are exactly
+I1, I2's increment, and I5.
+
+Everything else is refused by `core.CheckLink`, the same function §7 step 4 runs
+on arrival. That is the load-bearing decision of M3: §6's rules and §7's rules
+are the same rules, so they cannot drift, and §6 step 4's two-sided constraint
+map rule (a non-empty parent map forces the child to carry exactly the same
+argument keys; an empty one lets it introduce them) is unreachable from the
+derivation API because it lives inside `CheckI4`.
+
+The one check `Derive` adds on its own is `jcs.CheckNumbers` over the capability
+entry before signing (NOTES #7 addendum) and an up-front terminal-parent refusal
+citing §4.3 — `CheckLink` step 4e would catch that too, but as a statement about
+a malformed chain rather than an answer to "may I delegate at all".
 
 ### Public API of `internal/core` (signatures only)
 
@@ -237,6 +283,7 @@ var  DefaultLimits = Limits{MaxDelegationDepth: 8, MaxIATSkew: 30, MaxTokenLifet
 
 func CheckRoot(root *Token, now int64, lim Limits) error           // §7 steps 3c, 3e-3k, 3m
 func CheckLink(parent, child *Token, now int64, lim Limits) error  // §7 steps 4c-4p, I1-I4
+func SameScope(child, parent *Token) bool                          // §6, final paragraph; an observation, never a denial
 ```
 
 Four more things a caller must know:
@@ -277,6 +324,126 @@ Three things a caller must know:
 3. **`Check` takes `encoding/json` output** — `float64`, `[]any`,
    `map[string]any`, `nil`. `1` and `1.0` are the same argument value, the same
    identification RFC 8785 makes upstream.
+
+---
+
+## M3 exit state
+
+### Derivation is verification run forwards
+
+`Deriver.Derive` projects the parent and the *candidate* child to `core.Token`
+and runs `core.CheckLink` before anything is signed. This is the whole design.
+The alternative — a second set of checks written against §6's wording — would
+have two implementations of I1–I4 that must agree forever, and the failure mode
+is silent: a Deriver looser than the verifier mints tokens that die on arrival,
+a Deriver stricter than the verifier refuses chains that would have been fine.
+
+`project` was split into `projectClaims(Claims)` for this: the child does not
+exist as a `*Token` until it has been signed, and it must not be signed until it
+has been checked.
+
+**Consequence worth knowing.** `Derive` does not validate the chain above the
+parent. It extends a chain; it does not vouch for one. A holder that derives
+from a token it never verified mints a valid child of an invalid parent, and §7
+steps 1–3 at the enforcement point are where that is caught. This is correct —
+a deriving holder often cannot verify the root, having no trust anchor — but it
+means "Derive succeeded" is not "this chain will be accepted".
+
+### What could not be gotten wrong, and how
+
+Three of the six invariants are not expressible as a mistake through this API:
+
+- **I1** — `iss` is derived from `signKey`'s public half. Naming a different
+  issuer is not possible; holding the wrong key fails `CheckLink` step 4c before
+  a signature exists.
+- **I2's increment** — `del_depth` is `parent + 1`, computed. Only the ceiling
+  (`del_max_depth`) is caller-supplied, and step 4g bounds it.
+- **I5** — `par_hash` is `ParentHash(parent)`, computed over the parent's JWS
+  Signing Input.
+
+I6 is caller-supplied (`HolderKey`) but checked: absent is refused, and a JWK
+carrying a `d` member is refused before it can be minted into a token the whole
+chain carries downstream.
+
+That is why the derivation tests are thin and the *forgery* tests are not.
+`TestForgedLeafIsDeniedAtVerify` builds a genuine two-token derived chain and
+extends it with a leaf minted straight from `Claims`, past `Derive` entirely —
+one case per invariant, each denied at verify. Derive refusing to sign something
+proves nothing about a holder who does not use Derive, and mint→verify round
+trips through a shared `CheckLink` cannot fail even when the verifier is wrong.
+
+### Same-scope derivations: permit, flag, never deny
+
+§6's final paragraph says a derivation that narrows nothing "is technically
+valid by the invariants above" and merely consumes a delegation depth, and
+permits an enforcement point to log it as anomalous. warden does exactly that
+and no more:
+
+- `core.SameScope` compares `del_max_depth`, `exp` and the parsed constraint
+  trees. It errs toward *not* flagging — `one_of["a"]` against `exact "a"` reads
+  as narrowed — because a false flag costs an operator an investigation and a
+  missed one costs nothing, since no invariant depended on the answer.
+- `Verifier.VerifyReport` returns positions in `Report.SameScope`; `Verify` is a
+  wrapper that drops it. A return value, not shared state, so there is nothing
+  to race.
+- The proxy puts it on `chain.same_scope` in the audit record and adds a `pass`
+  trace step. **It is not an `outcome` value.** A record whose decision is
+  neither permit nor deny would be a third state for M4 to account for, and the
+  draft is unambiguous that this is a permit.
+
+The signal is that a delegation depth was spent buying no attenuation — which is
+what a relayed or stolen token looks like when the holder re-wraps it to change
+the holder key without giving anything up.
+
+### Revocation: what §8.9 actually offers
+
+§8.9 puts per-token revocation outside the specification and offers two things
+instead. warden implements one and declines the other.
+
+**Implemented: lifetime bounds.** `-max-token-lifetime` (§4.4, default 90 days,
+the draft's RECOMMENDED upper bound) was a hardcoded constant in
+`buildEnforcer`; it is now a flag, because §8.9 makes it the only mitigation
+that exists for a stolen leaf. Non-positive is rejected — "unlimited" is not one
+of the values §4.4 offers.
+
+**Not implemented: rotation without downtime.** §8.9 says "Enforcement points
+SHOULD support configurable trust anchor sets to enable rotation without
+downtime." `-trust-anchors` already takes a set, so a rotation is a file edit —
+but applying it requires a restart. warden does not satisfy that SHOULD and does
+not claim to. Deferred deliberately: swapping the trust root underneath a
+running verifier is a concurrency and failure-mode design (what a chain
+mid-verification observes, whether a failed reload keeps the old set or denies
+everything, which set decided a given record), and shipping twenty lines of it
+as a side item of a delegation milestone puts the least-reviewed code in the
+tree directly in front of the authorization decision. NOTES.md #10.
+
+**Not built at all: lineage revocation.** ROADMAP M3 promised it before §8.9 was
+read. The draft defers lineage-scoped cascading revocation to "a companion
+document"; anything warden built would be a private protocol wearing the draft's
+vocabulary. The promise has been struck from the ROADMAP rather than quietly
+dropped.
+
+### Fixtures
+
+`aattest.New`/`NewLive` are unchanged and still hand-mint every token, so M2's
+proxy tests do not depend on `Derive` — a derivation bug must not be able to
+make an enforcement test pass. `aattest.Derived`/`DerivedLive` are the same
+shape built through `Deriver`, narrowing at the first link only, so
+`Derived(t, 3)` carries exactly one same-scope link at position 2 and
+`Derived(t, 2)` carries none. That is how `TestDerivedChainE2EPermits` asserts
+PERMIT and the anomaly flag in one round trip.
+
+### Deliberately not done in M3
+
+- **M2b, again.** `invocation_constraints`, budget, rate, counters, stateful
+  replay tracking. All five sit on the four unresolved ADR 0001 state issues,
+  and those are a spec question before they are an implementation.
+- **`wardenctl inspect`.** Still open, still M3 scope on paper.
+- **SIGHUP anchor reload.** Above.
+- **Verify-time rejection of ambiguous constraint literals.** Refused at mint
+  only. A collapsed literal arriving from another issuer is a defect in that
+  issuer's output, not an escalation — ambiguous *arguments* are already refused
+  at bind — and denying it would be an interop divergence needing an ADR.
 
 ---
 
@@ -1048,3 +1215,23 @@ whereas one written first would have had nothing to narrow.
   draft-01 gets an entry in `docs/ref/NOTES.md` — that is the difference
   between "we chose differently" and "the draft did not say".
 - STATE.md updated at the end of every session.
+
+---
+
+## Where M4 starts
+
+M4 is the eval harness and the p99 target. The measured starting position is in
+M2 exit state: ~2.1 ms p99 at depth 3 against a 1 ms target, and the profile
+says why — every request re-parses and re-canonicalizes every token, and a
+verified chain is immutable, so a verification cache keyed by chain bytes is the
+obvious first move.
+
+Two things M3 changed that M4 should know:
+
+1. `Verifier.VerifyReport` is now the primary entry point; `Verify` is a
+   two-line wrapper. A cache belongs behind `VerifyReport`, and the `Report` has
+   to be cached with the decision or same-scope flagging silently stops working
+   on cache hits.
+2. Audit records can now carry `chain.same_scope`. It appears only on permits.
+   Any M4 aggregation that buckets records by decision will see it as a normal
+   permit, which is intended — it is a field to alert on, not a third outcome.
