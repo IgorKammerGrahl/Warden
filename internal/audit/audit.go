@@ -1,10 +1,10 @@
 // Package audit writes warden decision records.
 //
 // The record shape is ARCHITECTURE §6. AAT draft-01 specifies no audit format;
-// this is warden's, and getting it right is most of what M1 exists to do. M1
-// emits decision "passthrough" and fills only the fields it can reach without
-// interpreting a token: M2 fills the jti/depth fields once §7 verification runs
-// in the request path.
+// this is warden's, and getting it right is most of what M1 exists to do. In
+// -passthrough-only the decision is "passthrough" and only the fields reachable
+// without interpreting a token are filled; enforcing, the decision is "permit"
+// or "deny" and the trace carries one Step per §3.2 pipeline stage.
 package audit
 
 import (
@@ -20,9 +20,17 @@ import (
 	"github.com/igorkg/warden/internal/aat/jcs"
 )
 
-// Decision values. M1 only ever emits Passthrough.
+// Decision values.
 const (
+	// DecisionPassthrough is -passthrough-only: relayed without an
+	// authorization decision. It is not a permit; nothing was checked.
 	DecisionPassthrough = "passthrough"
+	// DecisionPermit is an authorized invocation: §7 completed and every
+	// pipeline stage passed.
+	DecisionPermit = "permit"
+	// DecisionDeny is a refused invocation. The trace's last step names the
+	// stage that refused and the clause it cited.
+	DecisionDeny = "deny"
 )
 
 // Record is one decision, one JSONL line. Field names and nesting are
@@ -63,9 +71,9 @@ type Request struct {
 	ArgsDigest string `json:"args_digest"`
 }
 
-// Chain reports what the dev.warden/chain _meta key held. M1 records presence
-// and size only — it does not parse a token, so RootJTI, LeafJTI, Depth and
-// MaxDepth are absent and stay absent until M2.
+// Chain reports what the dev.warden/chain _meta key held. In -passthrough-only
+// that is presence and size only: no token is parsed, so RootJTI, LeafJTI, Depth
+// and MaxDepth stay absent.
 type Chain struct {
 	Present bool   `json:"present"`
 	Tokens  int    `json:"tokens"`
@@ -137,6 +145,9 @@ type Writer struct {
 	enc *json.Encoder
 
 	total, upstream, overhead []time.Duration
+
+	// err latches the first write failure and is never cleared. See Err.
+	err error
 }
 
 func NewWriter(w io.Writer) *Writer {
@@ -154,8 +165,8 @@ func NewWriter(w io.Writer) *Writer {
 //
 // ponytail: synchronous under a mutex, not §6's async writer. One tool call per
 // record is not a throughput problem; make it async when a measurement says so.
-// §6's "audit failure => fail closed" is an M2 obligation — M1 denies nothing,
-// so there is no decision to withhold.
+//
+// A failed write latches the Writer unhealthy; see Err.
 func (a *Writer) Write(r Record, t Timing) error {
 	overhead := t.Total - t.Upstream
 	r.LatencyUS = t.Total.Microseconds()
@@ -168,9 +179,43 @@ func (a *Writer) Write(r Record, t Timing) error {
 	a.upstream = append(a.upstream, t.Upstream)
 	a.overhead = append(a.overhead, overhead)
 	if err := a.enc.Encode(r); err != nil {
+		a.err = err
 		return err
 	}
-	return a.w.Flush()
+	if err := a.w.Flush(); err != nil {
+		a.err = err
+		return err
+	}
+	return nil
+}
+
+// Err reports the latch: the first write failure this Writer suffered, or nil.
+//
+// §6 makes a guardrail that cannot record its decisions refuse to make them, so
+// an enforcing proxy checks this before authorizing anything. Three properties
+// of the latch are deliberate.
+//
+// It is per-process, not per-connection. There is one sink and one file handle
+// behind this Writer, and a full disk or a revoked mount is a property of that
+// handle rather than of whoever happens to be connected — scoping the latch to a
+// connection would let the next connection re-discover the same failure and, in
+// the window before it did, authorize calls it could not record. wardend today
+// serves a single stdio peer, so the two scopes coincide; per-process is the one
+// that stays correct if a transport later multiplexes.
+//
+// It never clears. "The sink recovered" is only observable by writing, and
+// writing is what failed — so a reset would mean authorizing one unrecorded call
+// per probe to find out. Recovery is an operator action: fix the sink, restart
+// wardend. Fail-closed is not a mode you tiptoe out of.
+//
+// It is separate from the authorization path in the error the client sees
+// (proxy.ErrCodeAuditUnavailable, not the authorization code) because a proxy
+// refusing everything because its disk filled is otherwise indistinguishable
+// from a proxy with an authorization bug, and the two want opposite responses.
+func (a *Writer) Err() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.err
 }
 
 func (a *Writer) Close() error {
