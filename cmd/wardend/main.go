@@ -31,6 +31,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/igorkg/warden/internal/aat"
 	"github.com/igorkg/warden/internal/audit"
@@ -62,6 +63,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			"which per §8.5 lets a PoP captured here replay at any other enforcement point that accepts the same chain — set it if there is more than one")
 	maxDepth := fs.Int("max-delegation-depth", 8,
 		"the deployment's MAX_DELEGATION_DEPTH (§4.3); the draft recommends no value, topology decides")
+	maxLifetime := fs.Duration("max-token-lifetime", 90*24*time.Hour,
+		"the deployment's MAX_TOKEN_LIFETIME (§4.4), the largest exp-iat any token in a chain may carry; "+
+			"§8.9 puts per-token revocation outside the specification and makes this the instrument that "+
+			"bounds exposure to a stolen or misissued token, so shorter is the mitigation")
 	stats := fs.Bool("stats", true, "print the latency distributions to stderr on exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -75,7 +80,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	// Built before the audit file is opened and before the upstream is
 	// spawned, so a misconfigured enforcing wardend fails without leaving a
 	// subprocess behind or a log file that records nothing.
-	enforcer, err := buildEnforcer(*passthroughOnly, *anchorsPath, *audience, *maxDepth)
+	enforcer, err := buildEnforcer(*passthroughOnly, *anchorsPath, *audience, *maxDepth, *maxLifetime)
 	if err != nil {
 		return err
 	}
@@ -144,7 +149,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 // client. There is also no defensible default: a trust anchor is the deployment
 // naming who may issue authority, and guessing that is guessing the answer to
 // the only question the operator has to answer.
-func buildEnforcer(passthroughOnly bool, anchorsPath, audience string, maxDepth int) (*proxy.Enforcer, error) {
+func buildEnforcer(passthroughOnly bool, anchorsPath, audience string, maxDepth int, maxLifetime time.Duration) (*proxy.Enforcer, error) {
 	if passthroughOnly {
 		if anchorsPath != "" {
 			return nil, errors.New("-trust-anchors was given with -passthrough-only, " +
@@ -158,6 +163,10 @@ func buildEnforcer(passthroughOnly bool, anchorsPath, audience string, maxDepth 
 			"chain fails at §7 step 3b and wardend would deny every call for a reason that " +
 			"looks like the client's fault (pass -passthrough-only to relay without deciding)")
 	}
+	if maxLifetime <= 0 {
+		return nil, fmt.Errorf("-max-token-lifetime is %s; §4.4 requires a finite positive bound, "+
+			"and \"unlimited\" is not one of the values it offers", maxLifetime)
+	}
 	anchors, err := loadAnchors(anchorsPath)
 	if err != nil {
 		return nil, err
@@ -167,8 +176,8 @@ func buildEnforcer(passthroughOnly bool, anchorsPath, audience string, maxDepth 
 			TrustAnchors: anchors,
 			Limits: core.Limits{
 				MaxDelegationDepth: maxDepth,
-				MaxIATSkew:         30,             // §4.4 RECOMMENDED
-				MaxTokenLifetime:   90 * 24 * 3600, // §4.4 RECOMMENDED upper bound
+				MaxIATSkew:         30, // §4.4 RECOMMENDED
+				MaxTokenLifetime:   int64(maxLifetime.Seconds()),
 			},
 			PoPSkew:  aat.DefaultPoPSkew,
 			Audience: audience,
