@@ -442,17 +442,11 @@ func (p *Proxy) record(c *call) audit.Record {
 		})
 		return r
 	}
+	r.Chain, r.PoP = c.dec.chain, c.dec.pop
 
 	r.Decision = audit.DecisionDeny
 	if c.dec.allow {
 		r.Decision = audit.DecisionPermit
-	}
-	// The decision's richer view replaces the presence-and-size one only when
-	// binding succeeded. A record for a call denied at the binding stage keeps
-	// what readMeta observed without interpreting anything, which is all
-	// warden legitimately knows about a chain it could not bind.
-	if c.dec.chain.Present {
-		r.Chain, r.PoP = c.dec.chain, c.dec.pop
 	}
 	r.Trace = append(r.Trace, c.dec.trace...)
 	return r
@@ -514,11 +508,14 @@ func (p *Proxy) inspect(raw []byte, t0 time.Time) *call {
 	p.mu.Unlock()
 
 	return &call{
-		key:     string(msg.ID),
-		corr:    corr,
-		tool:    msg.Params.Name,
-		args:    msg.Params.Arguments,
-		meta:    readMeta(msg.Params.Meta),
+		key:  string(msg.ID),
+		corr: corr,
+		tool: msg.Params.Name,
+		args: msg.Params.Arguments,
+		// Enforcing, bind reads the same keys with meaning attached, so
+		// readMeta here would be the second parse of the same chain for an
+		// answer the first one already produces.
+		meta:    p.observeMeta(msg.Params.Meta),
 		rawMeta: msg.Params.Meta,
 		t0:      t0,
 	}
@@ -534,6 +531,16 @@ type metaInfo struct {
 	popPresent   bool
 	popBytes     int
 	spec         string
+}
+
+// observeMeta records presence, size and shape without interpreting anything.
+// Enforcing has no use for it: bind reads the same three keys and its findings
+// land on the decision, so running both would parse every chain twice.
+func (p *Proxy) observeMeta(m map[string]json.RawMessage) metaInfo {
+	if p.Enforce != nil {
+		return metaInfo{}
+	}
+	return readMeta(m)
 }
 
 func readMeta(m map[string]json.RawMessage) metaInfo {

@@ -91,14 +91,10 @@ func (e *Enforcer) Decide(tool string, rawArgs json.RawMessage, meta map[string]
 	d := &decision{}
 
 	// --- Stage 1: bind (ARCHITECTURE §3.1) --------------------------------
-	b, err := bind(rawArgs, meta)
+	b, err := d.bind(rawArgs, meta)
 	if err != nil {
 		return d.deny("bind", "ARCHITECTURE §3.1", err)
 	}
-	d.chain = audit.Chain{
-		Present: true, Tokens: len(b.chain), Bytes: b.chainBytes, Spec: b.spec,
-	}
-	d.pop = audit.PoP{Present: true, Bytes: len(b.pop)}
 	d.step("bind", "ARCHITECTURE §3.1", "bound",
 		fmt.Sprintf("chain %d tokens, %dB; pop %dB", len(b.chain), b.chainBytes, len(b.pop)))
 
@@ -137,10 +133,17 @@ func (e *Enforcer) Decide(tool string, rawArgs json.RawMessage, meta map[string]
 	d.step("capability", "§7 step 6b", "pass", "leaf authorizes the tool and every argument satisfies its constraint")
 	d.step("pop", "§7 step 7", "pass", "PoP verified under the leaf holder key: aat_id, aat_tool, JCS hta, iat window")
 
-	// The PoP's own identifiers, for the record. Parsed after verification, so
-	// unlike the chain pass above these are attested values.
-	if pop, err := aat.ParsePoP(b.pop); err == nil {
-		d.pop.JTI, d.pop.Aud = pop.Claims.JTI, pop.Claims.Audience
+	// The PoP's own identifiers, for the record. A bare payload decode rather
+	// than a second ParsePoP: verification just parsed, canonicalized and
+	// checked the signature over these bytes, so re-doing that work to read
+	// two strings out of it would be paying twice for an answer already
+	// established.
+	var popProbe struct {
+		JTI      string `json:"jti"`
+		Audience string `json:"aat_aud"`
+	}
+	if err := decodePayload(b.pop, &popProbe); err == nil {
+		d.pop.JTI, d.pop.Aud = popProbe.JTI, popProbe.Audience
 	}
 
 	// --- Stage 5: the warden extension gate (§2.4, §3.2 stage 5) ----------
@@ -184,7 +187,14 @@ type binding struct {
 // bind is ARCHITECTURE §3.1. Absent or malformed _meta is a DENY: there is no
 // unauthenticated path through the proxy and no bearer fallback, so every
 // failure in here is fail-closed by construction rather than by a policy flag.
-func bind(rawArgs json.RawMessage, meta map[string]json.RawMessage) (binding, error) {
+//
+// It fills the decision's chain and pop shape as it goes rather than on the way
+// out, so that a call denied halfway through still records what had been
+// established when it was refused. Presence and size are not decisions; they
+// are the only honest thing warden can say about a binding it could not parse,
+// and a record that omitted them would make a malformed chain and an absent one
+// look identical.
+func (d *decision) bind(rawArgs json.RawMessage, meta map[string]json.RawMessage) (binding, error) {
 	const ref = "ARCHITECTURE §3.1"
 	var b binding
 
@@ -199,9 +209,12 @@ func bind(rawArgs json.RawMessage, meta map[string]json.RawMessage) (binding, er
 	// An array of JWT strings, never a delimiter-joined one: §3.1 says so, and
 	// a decode failure here is the splitting-mismatch bug arriving as a clean
 	// denial instead of as a silently mis-split chain.
+	d.chain.Present = true
+	d.chain.Bytes = len(rawChain)
 	if err := json.Unmarshal(rawChain, &b.chain); err != nil {
 		return b, core.Deny(ref, "proxy: %q is not a JSON array of strings: %w", MetaChain, err)
 	}
+	d.chain.Tokens = len(b.chain)
 	if len(b.chain) == 0 {
 		return b, core.Deny(ref, "proxy: %q is an empty array", MetaChain)
 	}
@@ -211,14 +224,17 @@ func bind(rawArgs json.RawMessage, meta map[string]json.RawMessage) (binding, er
 		}
 		b.chainBytes += len(tok)
 	}
+	d.chain.Bytes = b.chainBytes
 
 	rawPoP, ok := meta[MetaPoP]
 	if !ok {
 		return b, core.Deny(ref, "proxy: params._meta carries no %q", MetaPoP)
 	}
+	d.pop.Present = true
 	if err := json.Unmarshal(rawPoP, &b.pop); err != nil {
 		return b, core.Deny(ref, "proxy: %q is not a JSON string: %w", MetaPoP, err)
 	}
+	d.pop.Bytes = len(b.pop)
 	if b.pop == "" {
 		return b, core.Deny(ref, "proxy: %q is an empty string", MetaPoP)
 	}
@@ -230,6 +246,7 @@ func bind(rawArgs json.RawMessage, meta map[string]json.RawMessage) (binding, er
 	if err := json.Unmarshal(rawSpec, &b.spec); err != nil {
 		return b, core.Deny(ref, "proxy: %q is not a JSON string: %w", MetaSpec, err)
 	}
+	d.chain.Spec = b.spec
 	// Exact match against the pinned identifier. This is also what refuses the
 	// "+dev.warden.invocation_constraints" profile label of §3.1: a chain that
 	// honestly declares the extension is turned away at the binding, before any
