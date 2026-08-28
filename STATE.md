@@ -1,14 +1,14 @@
 # warden — STATE
 
-Updated: 2026-08-23 (M3 closed — derivation; M3's revocation half dropped, see ROADMAP)
+Updated: 2026-08-28 (M4 closed — adversarial evaluation; the harness is `eval/`)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
-to start M4 without re-exploring the repo.
+to start M5 without re-exploring the repo.
 
 ## Current position
 
-**M0a, M0b1, M0b2, M1, M2 and M3 are complete.** M4 has not started.
+**M0a, M0b1, M0b2, M1, M2, M3 and M4 are complete.** M5 has not started.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -42,6 +42,13 @@ decision is that it refuses through `core.CheckLink` — literally the function
 of I1–I4 to drift from the first, and a derivation that would be denied on
 arrival is never signed.
 
+M4 added no behaviour. `eval/` is a corpus and a measurement harness — 58
+adversarial cases, 19 benign, run against a live proxy in one command — and its
+output is a number with its limits written down: 100% of the corpus blocked,
+85.2% of those blocks attributed to the right clause, 0 false positives, and a
+depth-3 p99 that still misses ROADMAP's target. The eight misattributed blocks
+are the milestone's real finding; see M4 exit state and `eval/METHOD.md`.
+
 **warden enforces the stateless half of the draft, and can now extend a chain.**
 What does not exist: no `invocation_constraints`, no budget or rate counters, no
 PoP `jti` replay set, no revocation, no policy file, no live key rotation, no
@@ -68,6 +75,7 @@ internal/aat/aattest/                        shared chain fixture: one chain, mi
 internal/proxy/                              the relay (framing, correlation) and the §3.2 enforcement pipeline
 internal/testserver/                         ~100-line stdio MCP server, the e2e's upstream peer
 cmd/wardend/                                 the daemon: flags, subprocess, wiring, latency report
+eval/                                        M4: adversarial + benign corpora, harness, results (METHOD.md)
 ```
 
 **All section citations (§x.y) resolve against the vendored draft**, never
@@ -326,6 +334,107 @@ Three things a caller must know:
    identification RFC 8785 makes upstream.
 
 ---
+
+## M4 exit state
+
+M4 is a measurement, not a feature. `eval/` is a `main` package outside
+`internal/`, run as `go run ./eval`, that builds `cmd/wardend`, constructs both
+corpora, presents every case to a live proxy over stdio, measures latency, and
+writes `eval/results/`. Method, corpus construction and the limits of every
+number: **`eval/METHOD.md`** — read it before quoting a figure.
+
+Committed results are the n=200 run of 2026-08-28. The rebuilt binary and the
+raw `.jsonl` logs are gitignored; `corpus.json`, `results.csv`, `results.json`,
+`latency.csv` and `summary.md` are committed.
+
+### What it measured
+
+| | |
+|---|---|
+| block rate | 100.0% (54/54); conformant draft-01 43/43, warden profile 11/11 |
+| attribution | 85.2% (46/54) correct, 11.1% (6/54) wrong clause, 3.7% (2/54) uncited |
+| false positives | 0.0% (0/19 benign) |
+| documented non-blocks | 4, first-class in the summary, not a footnote |
+| depth-3 total p99 | 1.246 ms against ROADMAP's <1 ms — a miss, down from M2's ~2.1 ms |
+
+The block rate is a property of the corpus, not of warden: same author as the
+code, 58 adversarial cases, nothing generated. Five corpus bugs were found and
+fixed by the first run — cases that died on a signature or a parse check before
+reaching the clause they were named for, each of which had been scoring a block
+for the wrong reason. That is what the attribution split is for.
+
+### The eight attribution findings, and where the fix goes
+
+All eight blocks are correct decisions with a misleading trace. They are one
+defect wearing two hats:
+
+1. **`internal/aat/chain.go:158` and `:227`** wrap every error out of
+   `verifyThenParse` in a single coarse `Deny` — `"§7 steps 4a-4b, I1"` and
+   `"§7 steps 3a-3b, I1"`. Parse-time errors carry no `Denial` of their own and
+   `RefOf` returns the innermost one, so the wrapper's ref is the only ref
+   there is. Six cases are told their link failed its parent-key binding when
+   the signature verified fine. The fix is to give the shape errors their own
+   `Denial` refs (§3.2 Table 1 → §7 3c/3d/4b*) and let `RefOf` keep the inner
+   one; the wrappers can stay as `fmt.Errorf`, which is transparent to `RefOf`.
+2. **`Claims.validate` (token.go:258) infers root-vs-derived from
+   `del_depth == 0`** instead of checking §3.2 Table 1 as a table. A root with
+   a non-zero `del_depth` is told its `par_hash` is missing; a child that did
+   not increment is told its `par_hash` should be absent. The message names the
+   row the token was inferred into, not the rule it broke.
+3. **Two cases fall to the `§7` stage floor** — `unrecognized-member-in-
+   constraint` and `empty-constraints-array` — because `core`'s constraint
+   parser refuses with a plain error. They want `§3.4`. Precise message, no
+   machine-readable ref.
+
+Two of the six (`i2-terminal-parent-delegates`, `i2-chain-beyond-deployment-
+max`) already carry the right clause `(§4.3 I2)` in the *message text*. Anything
+that alerts on `ref` rather than reading the sentence buckets them as I1.
+
+### What the harness guarantees, and what any audit change must not break
+
+The oracle joins audit records to cases by `audit.Record.Corr` (`"c"+seq`,
+assigned when the proxy reads the call, so presentation order by construction),
+and aborts the run rather than reporting if the record count differs from the
+call count, if a `corr` is out of range or duplicated, or if the joined record's
+argument digest does not match what the case sent. M1's pending-call bug is
+exactly the failure this exists to catch: one lost record shifts everything
+after it and fifty rows read as findings where there is one. **A change to
+`audit.Record.Corr` or to when records are emitted breaks the eval before it
+breaks anything else — that is intended.**
+
+The decision is read from the audit record, never from the wire, because the
+notification-bypass case has no response to read.
+
+### What the numbers do not cover
+
+- **The benign corpus cannot exercise I1–I4.** `aat.Deriver` runs
+  `core.CheckLink` before minting — the same function §7 step 4 runs. A benign
+  case violating I1–I4 fails at construction and is reported as `build_err`,
+  never presented. The 0% FP rate covers bind, §7 steps 1–3, 4q, 5, 6b and 7.
+  A legitimate delegation `CheckLink` wrongly refuses shows up as a build
+  failure, not a denial. There were none.
+- **Audience binding is unexercised** — no `-audience`, so §7 step 7d never
+  fires. That is the default deployment (NOTES #8), and the measurement says
+  nothing about a bound one.
+- **One trust anchor**, by choice: anchor-set size would confound the depth
+  measurement.
+- **T4 has no denial cases** — its only case is the documented non-block. The
+  `n/a` in that row stays `n/a` until budget counters exist.
+- **The peer is fast.** The upstream is `internal/testserver` in-process,
+  answering in tens of microseconds. Any percentage computed from the latency
+  table is a statement about that peer; the microseconds transfer, the ratios
+  do not.
+
+### Deliberately not done in M4
+
+- No fix for the eight attribution findings. M4 measures; changing the code
+  under measurement in the same milestone destroys the baseline.
+- No verification cache. The p99 gap is reported, not closed.
+- No property-based or generated benign corpus. 19 hand-written cases will not
+  find a false positive that needs an unusual argument shape.
+- No CI wiring. The harness is a command, not a gate; it takes seconds, and
+  making it a gate would turn a measurement into a test suite, which is what
+  the milestone was explicitly not for.
 
 ## M3 exit state
 
@@ -1125,14 +1234,16 @@ signature, it is in the wrong package.
    implementation will accept. If the interop suite carries a large integer,
    that is the first thing it will find.
 
-2. **M3 — delegation across processes**, plus the two state surfaces M2
-   deferred into it. The chain machinery is done and tested; what M3 adds is
-   agent B holding its own keypair, `wardenctl` rendering a chain, lineage
-   revocation — and, from M2: the PoP `jti` replay set and the per-tool
-   irreversibility configuration §8.5 conditions its MUST on. Settle the four
-   ADR 0001 state issues **before** writing either, since they decide where
-   state lives and what happens when it is lost, and a second store built on an
-   unsettled answer is debt taken twice.
+2. **M5 — the p99 target, and the attribution fixes M4 found.** Two pieces of
+   work with one regression check. The cache is the substantial half: keyed by
+   chain bytes, behind `VerifyReport`, caching the `Report` with the decision.
+   The attribution fixes are cheap and independent — refs and error
+   construction only, no decision changes — and `go run ./eval` scores both:
+   the attribution row must rise, the block rate must not move, and
+   `latency.csv` is the before/after. Still open from M2/M3 and unaffected by
+   M4: the PoP `jti` replay set, the per-tool irreversibility configuration
+   §8.5 conditions its MUST on, and the four ADR 0001 state issues, which
+   decide where that state lives and what happens when it is lost.
 
 3. **Fold the vendored draft back into ADR 0001.** The four issues below, plus
    the §10.3.1 finding, are resolvable against real text rather than against our
@@ -1218,20 +1329,26 @@ whereas one written first would have had nothing to narrow.
 
 ---
 
-## Where M4 starts
+## Where M5 starts
 
-M4 is the eval harness and the p99 target. The measured starting position is in
-M2 exit state: ~2.1 ms p99 at depth 3 against a 1 ms target, and the profile
-says why — every request re-parses and re-canonicalizes every token, and a
-verified chain is immutable, so a verification cache keyed by chain bytes is the
-obvious first move.
+M5 is the p99 target, and M4 built its instrument: `go run ./eval` reports
+depth-1/3/5 in three configurations, so a cache is measured by re-running it
+and diffing `eval/results/latency.csv`. The starting position is 1.246 ms
+total p99 at depth 3 against ROADMAP's <1 ms, and the cause named at M2 exit
+still holds — every request re-parses and re-canonicalizes every token, and a
+verified chain is immutable, so a verification cache keyed by chain bytes is
+the obvious first move.
 
-Two things M3 changed that M4 should know:
+Three things M5 should know:
 
-1. `Verifier.VerifyReport` is now the primary entry point; `Verify` is a
-   two-line wrapper. A cache belongs behind `VerifyReport`, and the `Report` has
-   to be cached with the decision or same-scope flagging silently stops working
-   on cache hits.
-2. Audit records can now carry `chain.same_scope`. It appears only on permits.
-   Any M4 aggregation that buckets records by decision will see it as a normal
-   permit, which is intended — it is a field to alert on, not a third outcome.
+1. `Verifier.VerifyReport` is the primary entry point; `Verify` is a two-line
+   wrapper. A cache belongs behind `VerifyReport`, and the `Report` has to be
+   cached with the decision or same-scope flagging silently stops working on
+   cache hits.
+2. Audit records can carry `chain.same_scope`. It appears only on permits. Any
+   aggregation that buckets records by decision sees it as a normal permit,
+   which is intended — it is a field to alert on, not a third outcome.
+3. The eight attribution findings above are the other open work, and they are
+   cheap: they change refs and error construction, not decisions. Re-run the
+   eval after fixing them; the attribution row is the regression check, and
+   `block rate` must not move.
