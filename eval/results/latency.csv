@@ -1,0 +1,8 @@
+config,depth,n,total_p50_us,total_p99_us,upstream_p50_us,upstream_p99_us,overhead_p50_us,overhead_p99_us
+enforcing,1,200,169,709,20,79,143,649
+enforcing,3,200,557,1246,54,144,507,1222
+enforcing,5,200,592,1501,57,142,530,1413
+passthrough-bound,1,200,27,68,13,44,12,33
+passthrough-bound,3,200,34,100,15,45,17,55
+passthrough-bound,5,200,41,100,16,44,22,56
+passthrough-bare,0,200,17,72,10,45,7,19
