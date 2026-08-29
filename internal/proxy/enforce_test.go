@@ -657,3 +657,99 @@ func TestPassthroughStillIgnoresNotifications(t *testing.T) {
 		t.Errorf("passthrough recorded %+v for an id-less call; M1 recorded none", recs)
 	}
 }
+
+// TestEnforcingRefusesBatch closes a bypass a real client found. inspect
+// reads one JSON-RPC object; a top-level array parsed as neither a tools/call
+// nor an error, so before the frame check a call wrapped in a one-element
+// batch was forwarded upstream having never been authorized. The call inside
+// this batch is one the enforcer would permit, which is the point: the
+// refusal has to come from the frame, not from the authority.
+func TestEnforcingRefusesBatch(t *testing.T) {
+	f := aattest.New(t, 3)
+	r := newRigWith(t, enforcer(f))
+
+	inner := strings.TrimSuffix(toolCall(t, `1`, aattest.Read, aattest.Allowed,
+		f.Meta(t, aattest.Read, aattest.Allowed)), "\n")
+	r.send(t, "["+inner+"]\n")
+	// A permitted call after it, so "the batch was not forwarded" is proved
+	// by the next message arriving rather than by a timeout.
+	r.send(t, toolCall(t, `2`, aattest.Read, aattest.Allowed,
+		f.Meta(t, aattest.Read, aattest.Allowed)))
+
+	fwd := r.forwarded(t)
+	if strings.HasPrefix(strings.TrimSpace(fwd), "[") {
+		t.Fatalf("the upstream received a batch: %s", fwd)
+	}
+	var got struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(fwd), &got); err != nil {
+		t.Fatalf("forwarded message is not JSON: %v", err)
+	}
+	if string(got.ID) != "2" {
+		t.Fatalf("the upstream received id %s; the batch was forwarded", got.ID)
+	}
+	r.reply(t, `{"jsonrpc":"2.0","id":2,"result":{"content":[]}}`+"\n")
+
+	if err := r.shutdown(t); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The client saw a refusal on a null id: JSON-RPC 2.0 §6 answers a
+	// rejected batch with one error object, and warden never opened the array
+	// to learn an element id.
+	var resp struct {
+		ID    json.RawMessage `json:"id"`
+		Error *struct {
+			Code int               `json:"code"`
+			Data map[string]string `json:"data"`
+		} `json:"error"`
+	}
+	lines := splitLines(r.clientOut.String())
+	if len(lines) != 2 {
+		t.Fatalf("client received %d messages, want the denial and the reply: %q", len(lines), lines)
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("the denial is not valid JSON-RPC: %v (%s)", err, lines[0])
+	}
+	if resp.Error == nil || resp.Error.Code != ErrCodeDenied || string(resp.ID) != "null" {
+		t.Fatalf("client received %s, want a -32001 error on a null id", lines[0])
+	}
+	if resp.Error.Data["stage"] != "frame" || resp.Error.Data["ref"] == "" {
+		t.Errorf("the denial does not name the frame check: %s", lines[0])
+	}
+
+	// A refusal warden does not record is a refusal an operator cannot see.
+	recs := r.records(t)
+	if len(recs) != 2 {
+		t.Fatalf("audit holds %d records, want the batch denial and the permit", len(recs))
+	}
+	if recs[0].Decision != audit.DecisionDeny {
+		t.Errorf("the batch was recorded as %q, want deny", recs[0].Decision)
+	}
+	if recs[0].Request.Tool != "" {
+		t.Errorf("the record names tool %q; warden refused the frame without "+
+			"opening the array, so it knows of no tool", recs[0].Request.Tool)
+	}
+	if len(recs[0].Trace) == 0 || recs[0].Trace[0].Stage != "frame" ||
+		recs[0].Trace[0].Ref == "" || recs[0].Trace[0].Detail == "" {
+		t.Errorf("the batch denial trace does not explain itself: %+v", recs[0].Trace)
+	}
+}
+
+// TestPassthroughForwardsBatch pins the deliberate half of the split above.
+// §3.1 makes M1 the one mode that does not shape traffic, and there is no
+// enforcement in it to bypass, so a batch is relayed byte for byte like
+// anything else warden does not recognize.
+func TestPassthroughForwardsBatch(t *testing.T) {
+	r := newRig(t)
+	batch := `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read","arguments":{}}}]`
+	r.send(t, batch+"\n")
+
+	if fwd := r.forwarded(t); fwd != batch {
+		t.Fatalf("passthrough altered a batch:\n got %s\nwant %s", fwd, batch)
+	}
+	if err := r.shutdown(t); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}

@@ -164,6 +164,20 @@ func (p *Proxy) clientToServer(cr *stampReader) error {
 		}
 		t0 := cr.firstByte()
 
+		// A batch is refused before anything else looks at it. inspect reads
+		// a single JSON-RPC object, so an array parsed as neither a tools/call
+		// nor an error and fell through to the forward below unexamined: a
+		// tools/call wrapped in a one-element array reached upstream without
+		// being authorized. Refusing the array is the fail-closed reading of
+		// §3.2, and the only one available — authorizing the elements
+		// individually would mean re-serializing them, which the note below
+		// forbids for signature reasons, and a batch reply is one array that
+		// this relay's per-id pending map cannot pair back to its elements.
+		if p.Enforce != nil && isBatch(raw) {
+			p.denyBatch(t0)
+			continue
+		}
+
 		// Inspect a copy; forward the original bytes. Never the other way
 		// round: re-serializing a decoded message reorders object members
 		// and can reformat numbers, and in a project that carries a JCS
@@ -473,6 +487,53 @@ func (f *framer) write(w io.Writer, raw []byte) error {
 	f.buf = append(append(f.buf[:0], raw...), '\n')
 	_, err := w.Write(f.buf)
 	return err
+}
+
+// isBatch reports whether a client message is a JSON-RPC batch: a top-level
+// array. The decoder hands back the value's own bytes, but leading whitespace
+// is skipped here anyway rather than relying on that.
+func isBatch(raw []byte) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// denyBatch refuses a batch and records it. The error carries a null id
+// because JSON-RPC 2.0 §6 answers a rejected batch with one error object, and
+// the array was never opened, so there is no element id to answer with. The
+// audit record names no tool for the same reason: warden refused the frame,
+// not a call, and guessing at what the array held would be a claim it did not
+// verify. Passthrough is unchanged — it forwards a batch as it forwards
+// everything else, because §3.1 makes M1 the one mode that does not shape
+// traffic, and nothing is being enforced there to bypass.
+func (p *Proxy) denyBatch(t0 time.Time) {
+	p.mu.Lock()
+	p.seq++
+	corr := "c" + strconv.FormatUint(p.seq, 10)
+	p.mu.Unlock()
+
+	const ref = "ARCHITECTURE §3.2"
+	c := &call{corr: corr, t0: t0, dec: &decision{
+		stage: "frame", ref: ref,
+		trace: []audit.Step{{
+			Stage: "frame", Ref: ref, Outcome: "deny",
+			Detail: "JSON-RPC batch refused: warden authorizes one tools/call at a time and does not open a batch array",
+		}},
+	}}
+	if err := p.writeClient(rpcError(json.RawMessage("null"), ErrCodeDenied,
+		"warden: request denied by the authorization policy",
+		map[string]string{"stage": c.dec.stage, "ref": c.dec.ref})); err != nil {
+		p.logf("failed to deliver the batch denial to the client: %v", err)
+	}
+	p.emitNoResponse(c)
 }
 
 // inspect extracts what M1 records from a client message, and returns nil for
