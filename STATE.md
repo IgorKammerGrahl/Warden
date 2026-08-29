@@ -1,14 +1,15 @@
 # warden — STATE
 
-Updated: 2026-08-28 (M4 closed — adversarial evaluation; the harness is `eval/`)
+Updated: 2026-08-28 (M4b closed — the attribution fixes; M5 closed — the demo)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
-to start M5 without re-exploring the repo.
+to pick up the next milestone without re-exploring the repo.
 
 ## Current position
 
-**M0a, M0b1, M0b2, M1, M2, M3 and M4 are complete.** M5 has not started.
+**M0a, M0b1, M0b2, M1, M2, M3, M4, M4b and M5 are complete.** Phase 1 of
+ROADMAP is done.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -44,10 +45,22 @@ arrival is never signed.
 
 M4 added no behaviour. `eval/` is a corpus and a measurement harness — 58
 adversarial cases, 19 benign, run against a live proxy in one command — and its
-output is a number with its limits written down: 100% of the corpus blocked,
-85.2% of those blocks attributed to the right clause, 0 false positives, and a
-depth-3 p99 that still misses ROADMAP's target. The eight misattributed blocks
-are the milestone's real finding; see M4 exit state and `eval/METHOD.md`.
+output is a number with its limits written down. Its first run read 100% of the
+corpus blocked, 85.2% of those blocks attributed to the right clause, and 0
+false positives; the eight misattributed blocks were the milestone's real
+finding.
+
+M4b spent those eight. All were one shape — a check that could not know a
+token's position in the chain answering before the check that could — and the
+fix mostly deleted checks rather than adding refs. Attribution is now 100%
+(54/54) with the block rate unchanged. See M4b exit state.
+
+M5 added no behaviour either. `demo/` is the story: `go run ./demo` runs two
+toy agents, the real proxy and a toy MCP server as goroutines in one process,
+and narrates five outcomes — one permit and four refusals — with every clause
+citation read back out of the audit record warden wrote. It is also a smoke
+test, since each scene asserts its own outcome. `README.md` is the front door
+that walks a stranger to it.
 
 **warden enforces the stateless half of the draft, and can now extend a chain.**
 What does not exist: no `invocation_constraints`, no budget or rate counters, no
@@ -76,6 +89,8 @@ internal/proxy/                              the relay (framing, correlation) an
 internal/testserver/                         ~100-line stdio MCP server, the e2e's upstream peer
 cmd/wardend/                                 the daemon: flags, subprocess, wiring, latency report
 eval/                                        M4: adversarial + benign corpora, harness, results (METHOD.md)
+demo/                                        M5: two agents, the real proxy, a narrated transcript
+README.md                                    the front door: what warden is, `go run ./demo`, the numbers
 ```
 
 **All section citations (§x.y) resolve against the vendored draft**, never
@@ -335,6 +350,107 @@ Three things a caller must know:
 
 ---
 
+## M5 exit state
+
+M5 is `demo/`, three files and no new behaviour. `go run ./demo` wires agent A,
+agent B, `internal/proxy` in enforcing mode and a toy MCP server as goroutines
+joined by `io.Pipe`s, and prints a transcript: A derives a narrower token for B,
+B does its job, and then B fails four different ways.
+
+| scene | what B does | outcome | clause warden cited |
+|---|---|---|---|
+| 1 | `search {"source":"docs","limit":3}` | permit | — |
+| 2 | `delete_file` | deny | `§7 step 6b` |
+| 3 | `search` with `limit: 40` | deny | `§3.4 range` |
+| 4 | `Derive` a child holding `fetch_url` | refused, unsigned | `§7 step 4p1, I4` |
+| 5 | the same child, forged and presented | deny | `§7 step 4p1, I4` |
+
+Scenes 4 and 5 are the pair the milestone exists for: asking produced no token,
+forging produced one no verifier accepts, and both cite the same clause because
+`Derive` refuses through `core.CheckLink` — the function §7 step 4 runs.
+Attenuation is not policy warden applies to delegation; it is the only shape a
+delegation chain can have and still verify.
+
+Three properties worth keeping if the demo is ever rewritten:
+
+1. **The prose is the demo's, the citations are warden's.** Every ref and every
+   detail line printed under a denial is read out of the `audit.Record` the
+   proxy wrote, drained off an `io.Pipe` into a channel. A demo that hard-coded
+   its own citations would keep passing after the code stopped citing correctly.
+2. **Each scene declares its expected decision and the run fails if it differs.**
+   `go run ./demo` is therefore a smoke test as well as a walkthrough, which is
+   why it needs no test file of its own.
+3. **The toy server would run anything.** It has no idea warden exists. That is
+   what makes every refusal in the transcript warden's rather than the peer's.
+
+`README.md` is new: what warden is, `go run ./demo`, the eval numbers with a
+pointer at `eval/METHOD.md` before believing them, and the layout. ROADMAP's M5
+exit asks for it.
+
+### A conflict this session resolved
+
+STATE.md's own "Where M5 starts" and "Next 3 tasks" defined M5 as the p99
+target plus a verification cache. `docs/ROADMAP.md` §M5 defines M5 as the demo.
+**ROADMAP won**: it is the plan of record and the milestone numbering belongs to
+it. The p99 work is real and unclaimed — it is written up under "Where the next
+milestone starts" below, without a milestone number, because assigning one is a
+ROADMAP edit and not a STATE edit.
+
+---
+
+## M4b exit state
+
+M4b spent M4's eight attribution findings. No decision changed: block rate
+stayed at 100% (54/54) and the benign corpus stayed at 0 denials. Attribution
+went 85.2% → **100.0% (54/54)**, uncited class emptied.
+
+**The diagnosis generalizes past these eight.** `internal/core/chain.go` already
+carried every wanted citation — `§7 step 3c`, `§7 step 4d, I2`, `§7 step 4e,
+I2`. They never ran, because a coarser check upstream answered first with a
+worse ref. So the fix mostly *removed* checks:
+
+1. `verifyThenParse` is gone, split into `verifySignature` (algorithm then
+   signature, keeping the coarse `3a-3b` / `4a-4b` refs that five cases
+   legitimately want) and a separate `Parse` under its own clause — `§7 step 3b`
+   for the root, `§7 steps 4b1-4b5` for a link. A claim defect no longer reads
+   as a key-binding failure.
+2. `Claims.validate` stopped inferring root-vs-derived from `del_depth == 0`.
+   The par_hash-presence rule and the `del_depth <= del_max_depth` bound left it
+   entirely; §7 asks them where the position is known (steps 3d, 4b5, 4d, 4e,
+   4m). The derived-`iss` thumbprint-prefix test left too: §7 step 4c compares
+   `iss` to the parent holder key's actual thumbprint, which is strictly
+   stronger and cites I1 correctly.
+3. **The same inference stayed in `Mint`**, with a comment saying why it is
+   sound there and not in `validate`: the caller authored those claims, so the
+   two fields cannot disagree the way an attacker's can, and warden must not
+   sign what its own verifier would deny. This is the rule to keep — *position
+   may be inferred at issuance, never at verification.*
+4. Seven structural refusals in `core`'s constraint parser became
+   `Deny("§3.4", …)`, which emptied the uncited class rather than fixing only
+   the two rows the corpus happened to contain.
+
+**Two test-hygiene lessons, both worth remembering.**
+
+`core.CheckI4` walks a Go map, so a fixture that violates I4 two ways at once
+reports whichever violation the runtime iterates first — an intermittent failure
+that looks like a real bug. Two fixtures did this and were narrowed to one
+violation each. Any new I4 case must mutate exactly one thing.
+
+The corpus had the same confound: `root-carries-par_hash` forged a par_hash that
+was *also* not base64url, so Table 1's shape rule (position-independent, and
+correctly checked at parse) fired before the positional prohibition. The forged
+value is now well-formed. No expectation was relabelled — `eval/METHOD.md` is
+explicit that relabelling a case to make it pass is not a fix, and the shape rule
+kept its own unit test.
+
+`chain_test.go` gained `hop.forge`, which signs claims past `Mint`'s issuance
+guards, because the position tests need shapes `Mint` now correctly refuses to
+produce. Four rows left `TestStructuralRules` for `chain_test.go` with comments
+saying where they went and why a single-token test could not have named the
+defect.
+
+---
+
 ## M4 exit state
 
 M4 is a measurement, not a feature. `eval/` is a `main` package outside
@@ -352,7 +468,7 @@ raw `.jsonl` logs are gitignored; `corpus.json`, `results.csv`, `results.json`,
 | | |
 |---|---|
 | block rate | 100.0% (54/54); conformant draft-01 43/43, warden profile 11/11 |
-| attribution | 85.2% (46/54) correct, 11.1% (6/54) wrong clause, 3.7% (2/54) uncited |
+| attribution | 85.2% (46/54) correct, 11.1% (6/54) wrong clause, 3.7% (2/54) uncited — **superseded by M4b, now 100%** |
 | false positives | 0.0% (0/19 benign) |
 | documented non-blocks | 4, first-class in the summary, not a footnote |
 | depth-3 total p99 | 1.246 ms against ROADMAP's <1 ms — a miss, down from M2's ~2.1 ms |
@@ -364,6 +480,10 @@ reaching the clause they were named for, each of which had been scoring a block
 for the wrong reason. That is what the attribution split is for.
 
 ### The eight attribution findings, and where the fix goes
+
+**All eight are fixed; see M4b exit state.** Kept as written because the
+diagnosis is the part that generalizes, and because the M4b section describes
+the fix in terms of it.
 
 All eight blocks are correct decisions with a misleading trace. They are one
 defect wearing two hats:
@@ -1234,16 +1354,15 @@ signature, it is in the wrong package.
    implementation will accept. If the interop suite carries a large integer,
    that is the first thing it will find.
 
-2. **M5 — the p99 target, and the attribution fixes M4 found.** Two pieces of
-   work with one regression check. The cache is the substantial half: keyed by
-   chain bytes, behind `VerifyReport`, caching the `Report` with the decision.
-   The attribution fixes are cheap and independent — refs and error
-   construction only, no decision changes — and `go run ./eval` scores both:
-   the attribution row must rise, the block rate must not move, and
-   `latency.csv` is the before/after. Still open from M2/M3 and unaffected by
-   M4: the PoP `jti` replay set, the per-tool irreversibility configuration
-   §8.5 conditions its MUST on, and the four ADR 0001 state issues, which
-   decide where that state lives and what happens when it is lost.
+2. **The p99 target and the state that M2/M3 deferred.** The attribution half
+   of this item is done (M4b); the cache is not, and is written up under "Where
+   the next milestone starts" below. Alongside it, still open and all of it
+   state rather than algorithm: the PoP `jti` replay set, the per-tool
+   irreversibility configuration §8.5 conditions its MUST on, and the four ADR
+   0001 state issues, which decide where that state lives and what happens when
+   it is lost. `go run ./eval` is the regression check for any of it — the block
+   rate and the attribution row must not move, and `latency.csv` is the
+   before/after.
 
 3. **Fold the vendored draft back into ADR 0001.** The four issues below, plus
    the §10.3.1 finding, are resolvable against real text rather than against our
@@ -1329,17 +1448,22 @@ whereas one written first would have had nothing to narrow.
 
 ---
 
-## Where M5 starts
+## Where the next milestone starts
 
-M5 is the p99 target, and M4 built its instrument: `go run ./eval` reports
-depth-1/3/5 in three configurations, so a cache is measured by re-running it
-and diffing `eval/results/latency.csv`. The starting position is 1.246 ms
-total p99 at depth 3 against ROADMAP's <1 ms, and the cause named at M2 exit
-still holds — every request re-parses and re-canonicalizes every token, and a
-verified chain is immutable, so a verification cache keyed by chain bytes is
-the obvious first move.
+Phase 1 of ROADMAP is closed. The next milestone has no number yet — assigning
+one is a `docs/ROADMAP.md` edit, and this file does not get to number
+milestones. What follows is the work, in the order it is ready.
 
-Three things M5 should know:
+**The p99 target.** M4 built the instrument: `go run ./eval` reports depth-1/3/5
+in three configurations, so a cache is measured by re-running it and diffing
+`eval/results/latency.csv`. Depth-3 total p99 sits either side of ROADMAP's
+<1 ms depending on the run — 0.855 ms and 1.246 ms are both real observations
+from this machine — so the first honest step is more samples, not a cache. The
+cause named at M2 exit still holds: every request re-parses and re-canonicalizes
+every token, and a verified chain is immutable, so a verification cache keyed by
+chain bytes is the obvious move once the number is stable enough to defend.
+
+Two things that work should know:
 
 1. `Verifier.VerifyReport` is the primary entry point; `Verify` is a two-line
    wrapper. A cache belongs behind `VerifyReport`, and the `Report` has to be
@@ -1348,7 +1472,18 @@ Three things M5 should know:
 2. Audit records can carry `chain.same_scope`. It appears only on permits. Any
    aggregation that buckets records by decision sees it as a normal permit,
    which is intended — it is a field to alert on, not a third outcome.
-3. The eight attribution findings above are the other open work, and they are
-   cheap: they change refs and error construction, not decisions. Re-run the
-   eval after fixing them; the attribution row is the regression check, and
-   `block rate` must not move.
+
+**What else remains**, unchanged by M4b and M5 and listed in Next 3 tasks above:
+Tenuo interop, which is the only test that validates the independent-conformant-
+implementation claim; the four ADR 0001 state issues, which decide where
+replay-set and budget state lives and what happens when it is lost; and ROADMAP
+M2b's static operator policy, which can only narrow an already-valid chain and
+therefore could not have been written first.
+
+Two smaller items the demo made visible and did not fix:
+
+- The demo asserts its own scenes and exits non-zero on a surprise, but nothing
+  runs it in CI. There is no CI.
+- `demo/` and `eval/` each carry a small hand-rolled MCP client and server.
+  `internal/testserver` is a third. Three is not yet a reason to build a fourth
+  thing they all share; four would be.

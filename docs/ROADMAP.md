@@ -190,7 +190,7 @@ reason it was deferred the first time — `invocation_constraints`, budget, rate
 counters and stateful replay tracking all sit on the four unresolved ADR 0001
 state issues, and those are a spec question before they are an implementation.
 
-## M4 — Eval harness (the paper's data)
+## M4 — Eval harness (the paper's data) — shipped 2026-08-28
 
 `eval/` harness driving adversarial + benign scenario suites against a live
 `wardend`: confused deputy (T1), delegation escalation (T2), injection-driven
@@ -238,7 +238,7 @@ needs designing rather than adding. Either the cache lands before M4 or the
 target is restated against measured evidence; it is not carried forward as an
 aspiration.
 
-## M5 — Demo
+## M5 — Demo — shipped 2026-08-28
 
 Two toy Go agents: A derives a constrained research task token for B (library
 derivation, `_meta` binding per ARCHITECTURE §3.1); B legitimately uses its granted
@@ -249,6 +249,15 @@ BuilderHub pitch.
 
 - Exit: `make demo` (or `go run ./demo`) runs end-to-end unattended; README
   walks a stranger through it in < 5 minutes.
+
+**Shipped 2026-08-28** as `demo/` and `README.md`; `go run ./demo`, no Makefile.
+Two deviations from the scene list above, both deliberate. "Over budget" is not
+demonstrated because warden has no budget counters — that is the stateful path
+M2b defers, and a demo cannot show a check that does not exist. The out-of-scope
+scenes are instead: a tool absent from the leaf, an argument outside the leaf's
+range where the *root* would have allowed it, and a derivation wider than its
+parent — attempted through the library and then forged and presented. The last
+pair is what shows attenuation is structural rather than policy.
 
 ## Cross-cutting (every milestone)
 
