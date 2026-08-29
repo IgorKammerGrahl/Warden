@@ -432,3 +432,99 @@ point must guarantee during a rotation — most usefully, that a chain accepted 
 step 3 is decided against the anchor set it was accepted under — or it should
 soften to a MAY and leave the whole mechanism to the companion document, which
 is where the rest of revocation already lives.
+
+---
+
+## 11. §3.3 defers optional arguments to extension types that cannot express them
+
+**Where.** §3.3 closed-world mode, §7 step 6b, and the extension constraint
+type registry in §3.5 / §10.3.
+
+**What the text says.** §3.3 is not vague here, and this note is not about
+ambiguity. It states the rule and defends it: "A constrained argument that is
+absent from the invocation MUST also be rejected... This is a security
+property, not a configuration option." It then acknowledges the consequence by
+name — "There is no 'optional constraint' mechanism" — and defers: "Optional
+constrained arguments are outside the core constraint model; profiles or
+extension constraint types that require such behavior must define it
+explicitly." §7 step 6b implements both halves without exception: an argument
+in `args` but not in the constraint map is denied, and an argument in the
+constraint map but not in `args` is denied.
+
+**What is open.** The deferral names two escape routes and neither one exists.
+
+*Extension constraint types cannot reach this.* §3.5.2 defines an extension
+type as a check predicate "evaluated against an argument value at invocation
+time", and §3.4 step 3 evaluates it "against the presented argument value".
+The §10.3.2 registration template asks for additional members, a check
+predicate over a value, a subsumes procedure, cross-type pairs, and security
+considerations. Nothing in that template is reached when the argument is
+absent: step 6b denies before any predicate runs, and it branches on presence
+in the constraint map, not on the constraint's type. A registered type named
+`optional_wildcard` would be denied for absence exactly as `wildcard` is. So
+the sentence pointing implementers at extension constraint types points at a
+mechanism that is structurally incapable of the behavior, and the draft
+supplies a worked extension example (§3.5.3, `path_containment`) that does not
+exhibit the problem, which makes the deferral look more actionable than it is.
+
+*The remaining route is a profile, and §3.3's own guidance for it is wrong.*
+"Issuers who wish to permit an argument to be omitted MUST NOT include a
+constraint for it in the constraint map." Omitting an argument from the map
+does not permit the invocation to omit it — it forbids the invocation to
+*carry* it, by the closed-world rule three sentences earlier. The sentence
+conflates omission from the constraint map with omittability from the
+invocation, and they are opposites. The next sentence, "To authorize an
+argument without restricting its value, use a wildcard constraint", reads as
+the remedy but makes the argument mandatory, since step 6b exempts no type.
+Between the two, an argument a tool treats as optional has three possible
+policies and all three deny one of its two legal call shapes: absent from the
+map denies the call that carries it; `wildcard` in the map denies the call that
+omits it; a real constraint in the map denies the call that omits it. So a
+profile author is not merely unassisted — the guidance they would follow is
+inverted, and only §7 step 6b reveals it.
+
+**Why it matters more than it reads.** §3.3 frames the cost as losing the
+ability to constrain one argument. The actual cost is losing the tool: a single
+capability cannot admit both call shapes, so a tool with an optional argument
+is unusable through an enforcement point unless every caller happens to agree
+on one shape. That is not a corner. Against
+`@modelcontextprotocol/server-filesystem` 2026.7.10, driven by a real MCP
+client and enforced with a capability minted from that very workload with the
+intent of permitting it, 37 of 72 `tools/call` invocations were denied by this
+rule alone — 24 for an absent `tail`, 13 for an absent `head`. Constraining a
+line limit is ordinary operator hygiene. Both directions were confirmed against
+the same server: with a capability naming only `path`, `read_text_file(path)`
+is permitted and `read_text_file(path, head)` is denied; add `head` and `tail`
+and the first is denied instead.
+
+There is an attenuation consequence too. §4.5 presents constraint narrowing as
+restriction, and for a mandatory argument it is. For an optional one, adding a
+constraint does not shrink the permitted value set — it changes the required
+invocation shape, and breaks callers that were conformant by omission. A
+delegator narrowing a child's authority has no way to learn that from §4.5.
+
+**What warden does.** Implements §3.3 and §7 step 6b as written, both halves,
+with no exemption for `wildcard`, and denies. It does not treat an absent
+argument as vacuously satisfied: that would silence the first half and make
+every constraint evadable by omission, which is the attack the closed world
+exists to stop, and §3.3 is explicit that it is not a configuration option. The
+denials above were recorded, not engineered away. The audit trace distinguishes
+the two halves in words — `constrained argument "tail" is absent from the
+invocation` against `argument "head" is not named in the constraint map` — so
+an operator can tell a policy-expressivity problem from a bad token without
+reading the enforcement code.
+
+**Worth raising.** Yes, in two parts, and the first is cheap. §3.3's
+"Issuers who wish to permit an argument to be omitted MUST NOT include a
+constraint for it" is incorrect as written and should be struck or corrected;
+it is the one sentence in the section that a reader will act on. Second, the
+deferral to "profiles or extension constraint types" should drop the extension
+half, because the registry cannot carry it, and should say what a profile is
+permitted to override — step 6b's presence rule is the only lever, and a
+profile that moves it is changing the verification algorithm, not adding a
+type. If the working group would rather keep this in the core, the smallest
+change that preserves the security property is a `required` marker on the
+constraint map entry, defaulting to true: absence then denies exactly as it
+does today unless the issuer has said otherwise, and the closed world still
+rejects arguments the map never named, which is the half that carries the
+value.

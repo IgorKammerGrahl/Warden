@@ -1,6 +1,6 @@
 # warden — STATE
 
-Updated: 2026-08-28 (M4b closed — the attribution fixes; M5 closed — the demo)
+Updated: 2026-08-29 (real-peer shakedown — one bypass fixed, NOTES 11 filed)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
@@ -9,7 +9,8 @@ to pick up the next milestone without re-exploring the repo.
 ## Current position
 
 **M0a, M0b1, M0b2, M1, M2, M3, M4, M4b and M5 are complete.** Phase 1 of
-ROADMAP is done.
+ROADMAP is done, and it has since been run against a peer it did not write —
+see `docs/SHAKEDOWN.md` and the section below.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -71,6 +72,62 @@ than a hole in the verification algorithm — the §7 path is complete and
 enforced, and §6 now runs forwards through it.
 
 ---
+
+## Real-peer shakedown (2026-08-29)
+
+`wardend` in front of `@modelcontextprotocol/server-filesystem` 2026.7.10,
+driven by a Claude Code session: 72 `tools/call` across 11 tools, all four
+streams captured. Full write-up in `docs/SHAKEDOWN.md`; what a later session
+needs to know:
+
+**One bypass found and fixed.** A `tools/call` wrapped in a JSON-RPC batch
+array reached the upstream unauthorized — `inspect` unmarshals into a struct, a
+top-level array fails that unmarshal and returns `nil`, and `nil` skipped the
+authorize block. Proven with an upstream `tee` catching warden forwarding the
+array. Enforcing mode now refuses a top-level array at a `frame` stage ahead of
+`inspect`, `-32001` on a null id, audited with no tool named. Passthrough still
+forwards batches: §3.1 makes M1 the mode that does not shape traffic. Both
+halves have regression tests. **Do not "improve" this by opening the batch** —
+authorizing elements individually means re-serializing them, which breaks the
+byte-verbatim rule signatures depend on, and a batch reply cannot be paired
+back to its elements by the per-id pending map.
+
+**Passthrough framing is otherwise clean.** Byte-identical on both directions
+over ~100 KB. The real server sends `roots/list` *requests*, which the toy
+never did; both id namespaces start at 0, and `responseKey`/`inspect` already
+discriminate correctly. Verified, not assumed.
+
+**First honest latency numbers.** Against a peer doing real I/O (upstream p50
+0.25–0.39 ms): passthrough overhead p50 24–33 µs / p99 82–154 µs — tail 2.5x
+the in-process toy's, from 13 KB responses. Enforcing depth 1: p50 0.515 ms,
+p99 2.264 ms. Depth 2: p50 1.831 ms, p99 3.257 ms. Client-observed overhead is
+below this peer's run-to-run variance.
+
+**57 of 72 denied under a capability minted to permit the workload**, all
+legitimate work, in three classes: 37 closed-world (a constrained `head`/`tail`
+absent from the call), 18 `one_of` against paths created during the run, 2
+`subset` on `read_multiple_files`. A read-only token derived one level deeper
+denied 60, of which 8 are *correct* tool-level refusals — attenuation works.
+Nothing was loosened to improve these numbers, and nothing should be.
+
+**The closed world bites the opposite way from the prediction.** Not "unnamed
+arguments are rejected" but "**named arguments become mandatory**". Pincered
+against the real server: naming only `path` permits `read_text_file(path)` and
+denies `read_text_file(path, head)`; naming `head`/`tail` too denies
+`read_text_file(path)`. No third policy exists, so an optional argument is
+inexpressible. §3.3 says as much and defers to "profiles or extension
+constraint types" — the deferral does not work, because an extension type is a
+predicate over a *presented* value and §7 step 6b denies on absence before any
+predicate runs. That is NOTES 11, and it is the strongest spec finding the
+project has.
+
+**The two vocabulary gaps are not spec defects.** §10.3 is a Specification
+Required registry for extension constraint types and §3.5.3's worked example is
+`path_containment` — the draft anticipated the missing prefix type. What the
+workload adds is the cost of staying core-only: enumerating the tree as
+`one_of` produced a 15214-byte capability, and that is where the 18x
+enforcement overhead came from. Deployment-guide material, not NOTES material.
+Same for the missing element-wise combinator and object-argument vocabulary.
 
 ## Repository layout
 
