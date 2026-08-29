@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/igorkg/warden/internal/aat/jws"
 	"github.com/igorkg/warden/internal/core"
 )
 
@@ -19,6 +20,36 @@ type hop struct {
 	claims Claims
 	signer ed25519.PrivateKey
 	holder ed25519.PrivateKey
+
+	// omitParentHash stops mint from filling par_hash in, which is the only way
+	// to build the §7 step 4b5 case: a derived token with no par_hash at all.
+	omitParentHash bool
+
+	// forge signs the claims exactly as written, past Mint's issuance guards.
+	// Mint refuses to sign a token whose par_hash and del_depth disagree about
+	// its position, which is precisely the shape the position tests need on the
+	// wire. That guard is issuance-side; the point of these tests is that §7
+	// catches the same shape when someone else signs it.
+	forge bool
+}
+
+// mintRaw is Mint without the issuance guards. It still routes through Parse,
+// so the token is structurally valid — only its position in a chain is wrong.
+func mintRaw(t testing.TB, c Claims, key ed25519.PrivateKey) *Token {
+	t.Helper()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("mintRaw: marshal: %v", err)
+	}
+	compact, err := jws.Sign(jws.Header{Alg: jws.EdDSA, Typ: "JWT"}, raw, key)
+	if err != nil {
+		t.Fatalf("mintRaw: sign: %v", err)
+	}
+	tok, err := Parse(compact)
+	if err != nil {
+		t.Fatalf("mintRaw: parse: %v", err)
+	}
+	return tok
 }
 
 // chainFixture is a three-token chain plus everything a test needs to bend one
@@ -132,12 +163,17 @@ func (f *chainFixture) mint(t testing.TB) []string {
 	var parent *Token
 	for i, h := range f.hops {
 		c := h.claims
-		if i > 0 && c.ParentHash == "" {
+		if i > 0 && c.ParentHash == "" && !h.omitParentHash {
 			c.ParentHash = ParentHash(parent)
 		}
-		tok, err := Mint(c, h.signer)
-		if err != nil {
-			t.Fatalf("Mint hop %d: %v", i, err)
+		var tok *Token
+		if h.forge {
+			tok = mintRaw(t, c, h.signer)
+		} else {
+			var err error
+			if tok, err = Mint(c, h.signer); err != nil {
+				t.Fatalf("Mint hop %d: %v", i, err)
+			}
 		}
 		compact[i] = tok.Compact()
 		parent = tok
@@ -224,12 +260,47 @@ func TestDenyI1SignedByStranger(t *testing.T) {
 	denies(t, f, "read_file", goodArgs, "steps 4a-4b, I1")
 }
 
+// Table 1's position-dependent rules, each cited at the step that knows the
+// position. Parse cannot check any of these on one token without guessing which
+// end of the chain it came from, and a guess names the wrong defect: see the
+// comment on Claims.validate.
+func TestDenyRootCarriesParHash(t *testing.T) {
+	f := newChainFixture(t)
+	f.hops[0].claims.ParentHash = strings.Repeat("A", 43)
+	f.hops[0].forge = true
+	denies(t, f, "read_file", goodArgs, "step 3d")
+}
+
+func TestDenyRootNonZeroDepth(t *testing.T) {
+	f := newChainFixture(t)
+	f.hops[0].claims.DelegationDepth = 3
+	f.hops[0].forge = true
+	denies(t, f, "read_file", goodArgs, "step 3c")
+}
+
+func TestDenyDerivedOmitsParHash(t *testing.T) {
+	f := newChainFixture(t)
+	f.hops[2].omitParentHash = true
+	f.hops[2].forge = true
+	denies(t, f, "read_file", goodArgs, "step 4b5")
+}
+
+// A parent at del_depth == del_max_depth is terminal (§4.3): the child's depth
+// clears its own ceiling but not its parent's, so 4e is the clause, not 4m.
+func TestDenyTerminalParentDelegates(t *testing.T) {
+	f := newChainFixture(t)
+	f.hops[1].claims.MaxDelegationDepth = 1
+	f.hops[2].claims.MaxDelegationDepth = 1
+	f.hops[2].forge = true
+	denies(t, f, "read_file", goodArgs, "step 4e, I2")
+}
+
 // I2: depth monotonicity. A child that skips a depth, and a child that raises
 // the ceiling its parent set.
 func TestDenyI2DepthSkip(t *testing.T) {
 	f := newChainFixture(t)
 	f.hops[2].claims.DelegationDepth = 3
-	f.hops[2].claims.MaxDelegationDepth = 3 // else Mint rejects it single-token
+	f.hops[2].claims.MaxDelegationDepth = 3
 	denies(t, f, "read_file", goodArgs, "step 4d, I2")
 }
 

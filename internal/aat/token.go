@@ -91,6 +91,23 @@ func Mint(c Claims, key ed25519.PrivateKey) (*Token, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
+	// Here — and only here — reading position off del_depth is legitimate: the
+	// caller AUTHORED these claims, so the two fields cannot disagree about
+	// which token this is the way an attacker's can. Verification faces
+	// attacker-controlled bytes and must take position from the chain instead;
+	// see the comment on validate. Refusing at mint keeps the project's rule
+	// that warden never signs what its own verifier would deny (§7 steps 3d,
+	// 4b5).
+	if root := c.DelegationDepth == 0; root != (c.ParentHash == "") {
+		if root {
+			return nil, errors.New("aat: par_hash MUST be absent in root tokens (§3.2 Table 1)")
+		}
+		return nil, errors.New("aat: par_hash MUST be present in derived tokens (§3.2 Table 1)")
+	}
+	if c.DelegationDepth > c.MaxDelegationDepth {
+		return nil, fmt.Errorf("aat: del_depth (%d) exceeds del_max_depth (%d) (§4.3 I2)",
+			c.DelegationDepth, c.MaxDelegationDepth)
+	}
 
 	raw, err := json.Marshal(c)
 	if err != nil {
@@ -214,10 +231,9 @@ func ParentHash(parent *Token) string {
 	return b64.EncodeToString(sum[:])
 }
 
-// validate applies the single-token rules of Table 1 and the one line of I2
-// that is quantified over a single token (derived.del_depth <=
-// derived.del_max_depth, §4.3). Rules relating a token to its parent are not
-// checked here and cannot be: they need the parent.
+// validate applies the rules of Table 1 that are true of a token on its own.
+// Rules relating a token to its parent, or to its position in a chain, are not
+// checked here and cannot be: they need the chain. See the comment below.
 func (c Claims) validate() error {
 	if c.JTI == "" {
 		return errors.New("aat: jti is empty")
@@ -245,24 +261,23 @@ func (c Claims) validate() error {
 		return fmt.Errorf("aat: del_max_depth is %d, want non-negative (§3.2 Table 1)",
 			c.MaxDelegationDepth)
 	}
-	if c.DelegationDepth > c.MaxDelegationDepth {
-		return fmt.Errorf("aat: del_depth (%d) exceeds del_max_depth (%d) (§4.3 I2)",
-			c.DelegationDepth, c.MaxDelegationDepth)
-	}
 	if c.AuthorizationDetails == nil {
 		return errors.New("aat: authorization_details is absent or null (§3.2 Table 1)")
 	}
 
-	// par_hash: MUST be absent in root tokens, MUST be present in all derived
-	// tokens (§3.2 Table 1). del_depth == 0 is what makes a token a root.
-	root := c.DelegationDepth == 0
-	switch {
-	case root && c.ParentHash != "":
-		return errors.New("aat: par_hash MUST be absent in root tokens (§3.2 Table 1)")
-	case !root && c.ParentHash == "":
-		return errors.New("aat: par_hash MUST be present in derived tokens (§3.2 Table 1)")
-	}
-	if !root {
+	// Deliberately NOT checked here: whether par_hash is present, and whether
+	// del_depth <= del_max_depth.
+	//
+	// Table 1 conditions par_hash on the token being root or derived, and §4.3
+	// bounds del_depth against the ceiling its parent set. Both are questions
+	// about a POSITION IN A CHAIN, and validate holds one token. Inferring the
+	// position from del_depth == 0 makes the diagnosis describe the inference
+	// rather than the defect: a root carrying del_depth 3 gets told par_hash is
+	// missing (the real defect is §7 step 3c), and a child that failed to
+	// increment gets told par_hash should be absent (the real defect is §7 step
+	// 4d). §7 knows the position and says so — steps 3c/3d for the root,
+	// 4b5/4d/4e/4m for a link — so the checks live there.
+	if c.ParentHash != "" {
 		raw, err := b64.DecodeString(c.ParentHash)
 		if err != nil {
 			return fmt.Errorf("aat: par_hash is not base64url-nopad: %w", err)
@@ -271,14 +286,12 @@ func (c Claims) validate() error {
 			return fmt.Errorf("aat: par_hash decodes to %d bytes, want %d",
 				len(raw), sha256.Size)
 		}
-		// Table 1: a derived token's iss MUST be a JWK Thumbprint URI over its
-		// signing key. Only the form is checkable here; matching it against
-		// parent.cnf.jwk is I1.
-		if !strings.HasPrefix(c.Issuer, ThumbprintURIPrefix) {
-			return fmt.Errorf("aat: derived token iss %q is not a JWK Thumbprint URI (§3.2)",
-				c.Issuer)
-		}
 	}
+	// Table 1's "a derived token's iss MUST be a JWK Thumbprint URI over its
+	// signing key" is likewise not checked here. Which tokens are derived is a
+	// chain question, and §7 step 4c already compares the child's iss to
+	// jwk_thumbprint_uri(parent.cnf.jwk) — an equality against a known key,
+	// which is strictly stronger than this prefix test and cites I1 correctly.
 	return nil
 }
 

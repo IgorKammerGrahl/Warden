@@ -132,19 +132,19 @@ func parseConstraint(raw []byte, depth int) (*Constraint, error) {
 
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, fmt.Errorf("constraint: %w", err)
+		return nil, Deny("§3.4", "constraint: %w", err)
 	}
 	if obj == nil {
-		return nil, errors.New("constraint: not a JSON object")
+		return nil, Deny("§3.4", "constraint: not a JSON object")
 	}
 
 	rawType, ok := obj["constraint_type"]
 	if !ok {
-		return nil, errors.New("constraint: missing constraint_type")
+		return nil, Deny("§3.4", "constraint: missing constraint_type")
 	}
 	var typ string
 	if err := json.Unmarshal(rawType, &typ); err != nil {
-		return nil, fmt.Errorf("constraint: constraint_type: %w", err)
+		return nil, Deny("§3.4", "constraint: constraint_type: %w", err)
 	}
 	allowed, known := members[typ]
 	if !known {
@@ -158,11 +158,11 @@ func parseConstraint(raw []byte, depth int) (*Constraint, error) {
 		if name == "constraint_type" || slices.Contains(allowed, name) {
 			continue
 		}
-		return nil, fmt.Errorf("constraint %s: unrecognized member %q", typ, name)
+		return nil, Deny("§3.4", "constraint %s: unrecognized member %q", typ, name)
 	}
 	if req, need := requiredMember[typ]; need {
 		if _, ok := obj[req]; !ok {
-			return nil, fmt.Errorf("constraint %s: missing %s", typ, req)
+			return nil, Deny("§3.4", "constraint %s: missing %s", typ, req)
 		}
 	}
 
@@ -276,7 +276,7 @@ func decodeClauses(raw []byte, depth int) ([]Constraint, error) {
 		return nil, fmt.Errorf("constraints: %w", err)
 	}
 	if len(rawClauses) == 0 {
-		return nil, errors.New("constraints: must contain at least one clause")
+		return nil, Deny("§3.4", "constraints: must contain at least one clause")
 	}
 	clauses := make([]Constraint, 0, len(rawClauses))
 	for i, rc := range rawClauses {

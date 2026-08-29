@@ -363,14 +363,12 @@ func TestStructuralRules(t *testing.T) {
 		{"del_depth negative", func(m map[string]any) { m["del_depth"] = -1 }, true},
 		{"del_max_depth absent", func(m map[string]any) { delete(m, "del_max_depth") }, true},
 		{"del_max_depth negative", func(m map[string]any) { m["del_max_depth"] = -1 }, true},
-		{"del_depth exceeds del_max_depth", func(m map[string]any) {
-			m["del_depth"] = 4
-			m["par_hash"] = strings.Repeat("A", 43)
-		}, true},
-		{"par_hash present in root", func(m map[string]any) {
-			m["par_hash"] = strings.Repeat("A", 43)
-		}, true},
-		{"par_hash absent in derived", func(m map[string]any) { m["del_depth"] = 1 }, true},
+		// par_hash presence and del_depth <= del_max_depth are NOT here: both
+		// are position-in-chain rules, and Parse holds one token. They are
+		// asserted with their §7 citations in chain_test.go —
+		// TestDenyRootCarriesParHash (3d), TestDenyRootNonZeroDepth (3c),
+		// TestDenyDerivedOmitsParHash (4b5), TestDenyTerminalParentDelegates
+		// (4e). A Parse that guessed the position named the wrong defect.
 		{"par_hash present in derived", func(m map[string]any) {
 			m["del_depth"] = 1
 			m["iss"] = "urn:ietf:params:oauth:jwk-thumbprint:sha-256:" + rfc8037Thumbprint
@@ -386,11 +384,9 @@ func TestStructuralRules(t *testing.T) {
 			m["iss"] = "urn:ietf:params:oauth:jwk-thumbprint:sha-256:" + rfc8037Thumbprint
 			m["par_hash"] = strings.Repeat("+", 43)
 		}, true},
-		{"derived iss is not a thumbprint URI", func(m map[string]any) {
-			m["del_depth"] = 1
-			m["par_hash"] = strings.Repeat("A", 43)
-			m["iss"] = rootIssuer
-		}, true},
+		// "derived iss is not a thumbprint URI" is not here either: §7 step 4c
+		// compares it to the parent holder key's actual thumbprint, which is
+		// stronger than a prefix test. TestDenyI1IssuerMismatch covers it.
 		{"authorization_details absent", func(m map[string]any) {
 			delete(m, "authorization_details")
 		}, true},

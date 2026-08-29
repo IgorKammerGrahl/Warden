@@ -147,7 +147,12 @@ func adversarialCases(w *world) []Case {
 		Tool: "echo", WantRef: "§7 step 3d",
 		Note: "§3.2: par_hash MUST be absent at del_depth 0; aat.Mint refuses to produce this",
 	}, forgeRoot(w, advTools, 8, func(m map[string]any) {
-		m["par_hash"] = "sha-256:" + strings.Repeat("a", 43)
+		// Well-formed base64url-nopad on purpose. A malformed value would ALSO
+		// fail Table 1's shape rule, which Parse reaches first and cites as 3b,
+		// and the case would then be measuring two defects at once. Presence on
+		// a root is the one under test; the shape rule has its own unit test
+		// (aat_test.go, "par_hash not base64url").
+		m["par_hash"] = strings.Repeat("A", 43)
 	}, forgeOpts{}), goodArgs))
 
 	add(attack(Case{Name: "root-nonzero-del_depth", Class: "T2", Invariant: "I2",

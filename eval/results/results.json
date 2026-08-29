@@ -4,78 +4,78 @@
       "config": "enforcing",
       "depth": 1,
       "n": 200,
-      "total_p50_us": 169,
-      "total_p99_us": 709,
-      "upstream_p50_us": 20,
-      "upstream_p99_us": 79,
-      "overhead_p50_us": 143,
-      "overhead_p99_us": 649
+      "total_p50_us": 168,
+      "total_p99_us": 513,
+      "upstream_p50_us": 19,
+      "upstream_p99_us": 71,
+      "overhead_p50_us": 146,
+      "overhead_p99_us": 474
     },
     {
       "config": "enforcing",
       "depth": 3,
       "n": 200,
-      "total_p50_us": 557,
-      "total_p99_us": 1246,
-      "upstream_p50_us": 54,
-      "upstream_p99_us": 144,
-      "overhead_p50_us": 507,
-      "overhead_p99_us": 1222
+      "total_p50_us": 331,
+      "total_p99_us": 855,
+      "upstream_p50_us": 26,
+      "upstream_p99_us": 97,
+      "overhead_p50_us": 303,
+      "overhead_p99_us": 785
     },
     {
       "config": "enforcing",
       "depth": 5,
       "n": 200,
-      "total_p50_us": 592,
-      "total_p99_us": 1501,
-      "upstream_p50_us": 57,
-      "upstream_p99_us": 142,
-      "overhead_p50_us": 530,
-      "overhead_p99_us": 1413
+      "total_p50_us": 529,
+      "total_p99_us": 1204,
+      "upstream_p50_us": 42,
+      "upstream_p99_us": 112,
+      "overhead_p50_us": 476,
+      "overhead_p99_us": 1149
     },
     {
       "config": "passthrough-bound",
       "depth": 1,
       "n": 200,
-      "total_p50_us": 27,
-      "total_p99_us": 68,
-      "upstream_p50_us": 13,
+      "total_p50_us": 31,
+      "total_p99_us": 77,
+      "upstream_p50_us": 14,
       "upstream_p99_us": 44,
-      "overhead_p50_us": 12,
-      "overhead_p99_us": 33
+      "overhead_p50_us": 13,
+      "overhead_p99_us": 35
     },
     {
       "config": "passthrough-bound",
       "depth": 3,
       "n": 200,
-      "total_p50_us": 34,
-      "total_p99_us": 100,
-      "upstream_p50_us": 15,
-      "upstream_p99_us": 45,
-      "overhead_p50_us": 17,
-      "overhead_p99_us": 55
+      "total_p50_us": 43,
+      "total_p99_us": 125,
+      "upstream_p50_us": 18,
+      "upstream_p99_us": 71,
+      "overhead_p50_us": 24,
+      "overhead_p99_us": 105
     },
     {
       "config": "passthrough-bound",
       "depth": 5,
       "n": 200,
-      "total_p50_us": 41,
-      "total_p99_us": 100,
-      "upstream_p50_us": 16,
-      "upstream_p99_us": 44,
-      "overhead_p50_us": 22,
-      "overhead_p99_us": 56
+      "total_p50_us": 39,
+      "total_p99_us": 88,
+      "upstream_p50_us": 17,
+      "upstream_p99_us": 41,
+      "overhead_p50_us": 21,
+      "overhead_p99_us": 63
     },
     {
       "config": "passthrough-bare",
       "depth": 0,
       "n": 200,
-      "total_p50_us": 17,
-      "total_p99_us": 72,
-      "upstream_p50_us": 10,
-      "upstream_p99_us": 45,
+      "total_p50_us": 18,
+      "total_p99_us": 62,
+      "upstream_p50_us": 11,
+      "upstream_p99_us": 51,
       "overhead_p50_us": 7,
-      "overhead_p99_us": 19
+      "overhead_p99_us": 29
     }
   ],
   "results": [
@@ -94,9 +94,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 1056,
-      "latency_us": 1143,
-      "upstream_us": 87
+      "overhead_us": 1029,
+      "latency_us": 1072,
+      "upstream_us": 42
     },
     {
       "name": "orchestrator-narrows-tools",
@@ -113,9 +113,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 359,
-      "latency_us": 379,
-      "upstream_us": 19
+      "overhead_us": 365,
+      "latency_us": 396,
+      "upstream_us": 30
     },
     {
       "name": "orchestrator-planner-worker",
@@ -132,9 +132,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 548,
-      "latency_us": 625,
-      "upstream_us": 76
+      "overhead_us": 532,
+      "latency_us": 581,
+      "upstream_us": 49
     },
     {
       "name": "holder-shortens-ttl",
@@ -151,9 +151,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 240,
-      "latency_us": 253,
-      "upstream_us": 13
+      "overhead_us": 301,
+      "latency_us": 333,
+      "upstream_us": 31
     },
     {
       "name": "same-scope-handoff",
@@ -176,9 +176,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 278,
-      "latency_us": 291,
-      "upstream_us": 13
+      "overhead_us": 300,
+      "latency_us": 353,
+      "upstream_us": 53
     },
     {
       "name": "open-world-to-closed-world",
@@ -195,9 +195,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 670,
-      "latency_us": 686,
-      "upstream_us": 15
+      "overhead_us": 309,
+      "latency_us": 356,
+      "upstream_us": 46
     },
     {
       "name": "narrow-one_of-to-exact",
@@ -214,9 +214,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 289,
-      "latency_us": 325,
-      "upstream_us": 35
+      "overhead_us": 260,
+      "latency_us": 294,
+      "upstream_us": 33
     },
     {
       "name": "narrow-range",
@@ -233,9 +233,9 @@
       "wire_code": -32602,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 638,
-      "latency_us": 677,
-      "upstream_us": 38
+      "overhead_us": 695,
+      "latency_us": 737,
+      "upstream_us": 42
     },
     {
       "name": "narrow-wildcard-to-exact",
@@ -252,9 +252,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 270,
-      "latency_us": 297,
-      "upstream_us": 27
+      "overhead_us": 294,
+      "latency_us": 312,
+      "upstream_us": 18
     },
     {
       "name": "narrow-not_one_of",
@@ -271,9 +271,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 294,
-      "latency_us": 333,
-      "upstream_us": 39
+      "overhead_us": 635,
+      "latency_us": 684,
+      "upstream_us": 49
     },
     {
       "name": "narrow-subset",
@@ -290,8 +290,8 @@
       "wire_code": -32602,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 653,
-      "latency_us": 676,
+      "overhead_us": 612,
+      "latency_us": 636,
       "upstream_us": 23
     },
     {
@@ -309,9 +309,9 @@
       "wire_code": -32602,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 478,
-      "latency_us": 513,
-      "upstream_us": 35
+      "overhead_us": 709,
+      "latency_us": 743,
+      "upstream_us": 34
     },
     {
       "name": "sibling-a-reader",
@@ -328,9 +328,9 @@
       "wire_code": -32602,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 1029,
-      "latency_us": 1117,
-      "upstream_us": 87
+      "overhead_us": 821,
+      "latency_us": 854,
+      "upstream_us": 33
     },
     {
       "name": "sibling-b-search",
@@ -347,9 +347,9 @@
       "wire_code": -32602,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 687,
-      "latency_us": 755,
-      "upstream_us": 68
+      "overhead_us": 706,
+      "latency_us": 770,
+      "upstream_us": 64
     },
     {
       "name": "lower-delegation-ceiling",
@@ -366,9 +366,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 547,
-      "latency_us": 579,
-      "upstream_us": 31
+      "overhead_us": 279,
+      "latency_us": 298,
+      "upstream_us": 18
     },
     {
       "name": "terminal-leaf-invokes",
@@ -385,9 +385,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 273,
-      "latency_us": 332,
-      "upstream_us": 58
+      "overhead_us": 260,
+      "latency_us": 274,
+      "upstream_us": 14
     },
     {
       "name": "deep-chain-depth-5",
@@ -404,9 +404,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 937,
-      "latency_us": 1034,
-      "upstream_us": 97
+      "overhead_us": 511,
+      "latency_us": 688,
+      "upstream_us": 177
     },
     {
       "name": "authorized-notification",
@@ -423,8 +423,8 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 237,
-      "latency_us": 237,
+      "overhead_us": 257,
+      "latency_us": 257,
       "upstream_us": 0
     },
     {
@@ -442,9 +442,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 256,
-      "latency_us": 309,
-      "upstream_us": 52
+      "overhead_us": 272,
+      "latency_us": 296,
+      "upstream_us": 23
     },
     {
       "name": "bind-no-meta",
@@ -464,8 +464,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 28,
-      "latency_us": 28,
+      "overhead_us": 19,
+      "latency_us": 19,
       "upstream_us": 0
     },
     {
@@ -485,8 +485,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 12,
-      "latency_us": 12,
+      "overhead_us": 13,
+      "latency_us": 13,
       "upstream_us": 0
     },
     {
@@ -508,8 +508,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 13,
-      "latency_us": 13,
+      "overhead_us": 22,
+      "latency_us": 22,
       "upstream_us": 0
     },
     {
@@ -530,8 +530,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 13,
-      "latency_us": 13,
+      "overhead_us": 11,
+      "latency_us": 11,
       "upstream_us": 0
     },
     {
@@ -573,8 +573,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 14,
-      "latency_us": 14,
+      "overhead_us": 15,
+      "latency_us": 15,
       "upstream_us": 0
     },
     {
@@ -617,8 +617,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 22,
-      "latency_us": 22,
+      "overhead_us": 18,
+      "latency_us": 18,
       "upstream_us": 0
     },
     {
@@ -638,9 +638,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 278,
-      "latency_us": 312,
-      "upstream_us": 34
+      "overhead_us": 421,
+      "latency_us": 450,
+      "upstream_us": 29
     },
     {
       "name": "root-not-anchored",
@@ -661,8 +661,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 146,
-      "latency_us": 146,
+      "overhead_us": 111,
+      "latency_us": 111,
       "upstream_us": 0
     },
     {
@@ -678,14 +678,14 @@
       "depth": 1,
       "notify": false,
       "decision": "deny",
-      "ref": "§7 steps 3a-3b, I1",
+      "ref": "§7 step 3d",
       "stage": "verify",
-      "detail": "aat: root verifies under no trust anchor: aat: par_hash MUST be absent in root tokens (§3.2 Table 1) (§7 steps 3a-3b, I1)",
+      "detail": "aat: root carries par_hash \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"; §3.2 Table 1 forbids it on a root token (§7 step 3d)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 118,
-      "latency_us": 118,
+      "ref_mismatch": false,
+      "overhead_us": 112,
+      "latency_us": 112,
       "upstream_us": 0
     },
     {
@@ -700,14 +700,14 @@
       "depth": 1,
       "notify": false,
       "decision": "deny",
-      "ref": "§7 steps 3a-3b, I1",
+      "ref": "§7 step 3c",
       "stage": "verify",
-      "detail": "aat: root verifies under no trust anchor: aat: par_hash MUST be present in derived tokens (§3.2 Table 1) (§7 steps 3a-3b, I1)",
+      "detail": "core: root del_depth is 3, want 0 (§7 step 3c)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 103,
-      "latency_us": 103,
+      "ref_mismatch": false,
+      "overhead_us": 98,
+      "latency_us": 98,
       "upstream_us": 0
     },
     {
@@ -724,12 +724,12 @@
       "decision": "deny",
       "ref": "§7 step 3e, I3",
       "stage": "verify",
-      "detail": "core: root exp 1787943064 is not after now 1787946665 (§7 step 3e, I3)",
+      "detail": "core: root exp 1787959843 is not after now 1787963443 (§7 step 3e, I3)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 94,
-      "latency_us": 94,
+      "overhead_us": 95,
+      "latency_us": 95,
       "upstream_us": 0
     },
     {
@@ -751,8 +751,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 91,
-      "latency_us": 91,
+      "overhead_us": 86,
+      "latency_us": 86,
       "upstream_us": 0
     },
     {
@@ -773,8 +773,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 87,
-      "latency_us": 87,
+      "overhead_us": 86,
+      "latency_us": 86,
       "upstream_us": 0
     },
     {
@@ -813,12 +813,12 @@
       "decision": "deny",
       "ref": "§7 step 4c, I1",
       "stage": "verify",
-      "detail": "aat: chain[1]: core: child iss \"urn:ietf:params:oauth:jwk-thumbprint:sha-256:V4Mp-tNWV2-uKXPrjiRNncqL8GWrWCqzDB499zWYNBA\" is not the thumbprint URI of the parent holder key \"urn:ietf:params:oauth:jwk-thumbprint:sha-256:3JRAbcliALvJ_lWgvovaILO_G0SeoaMQiLBx7tD6Kvc\" (§7 step 4c, I1)",
+      "detail": "aat: chain[1]: core: child iss \"urn:ietf:params:oauth:jwk-thumbprint:sha-256:aEmZMl5z9lV0RUlBgqluxb30NNKNE9zmbaAja3YkUOo\" is not the thumbprint URI of the parent holder key \"urn:ietf:params:oauth:jwk-thumbprint:sha-256:V4BC5woOoQ_0peqE80DAsTd9sLoWWOvRK7UZmP-DMqQ\" (§7 step 4c, I1)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 353,
-      "latency_us": 353,
+      "overhead_us": 168,
+      "latency_us": 168,
       "upstream_us": 0
     },
     {
@@ -840,8 +840,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 151,
-      "latency_us": 151,
+      "overhead_us": 140,
+      "latency_us": 140,
       "upstream_us": 0
     },
     {
@@ -857,14 +857,14 @@
       "depth": 2,
       "notify": false,
       "decision": "deny",
-      "ref": "§7 steps 4a-4b, I1",
+      "ref": "§7 step 4d, I2",
       "stage": "verify",
-      "detail": "aat: chain[1]: aat: par_hash MUST be absent in root tokens (§3.2 Table 1) (§7 steps 4a-4b, I1)",
+      "detail": "aat: chain[1]: core: child del_depth 0, want parent 0 + 1 (§7 step 4d, I2)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 171,
-      "latency_us": 171,
+      "ref_mismatch": false,
+      "overhead_us": 159,
+      "latency_us": 159,
       "upstream_us": 0
     },
     {
@@ -885,8 +885,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 163,
-      "latency_us": 163,
+      "overhead_us": 169,
+      "latency_us": 169,
       "upstream_us": 0
     },
     {
@@ -908,8 +908,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 163,
-      "latency_us": 163,
+      "overhead_us": 158,
+      "latency_us": 158,
       "upstream_us": 0
     },
     {
@@ -925,14 +925,14 @@
       "depth": 3,
       "notify": false,
       "decision": "deny",
-      "ref": "§7 steps 4a-4b, I1",
+      "ref": "§7 step 4e, I2",
       "stage": "verify",
-      "detail": "aat: chain[2]: aat: del_depth (2) exceeds del_max_depth (1) (§4.3 I2) (§7 steps 4a-4b, I1)",
+      "detail": "aat: chain[2]: core: child del_depth 2 exceeds parent del_max_depth 1 (§7 step 4e, I2)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 242,
-      "latency_us": 242,
+      "ref_mismatch": false,
+      "overhead_us": 305,
+      "latency_us": 305,
       "upstream_us": 0
     },
     {
@@ -948,9 +948,9 @@
       "depth": 10,
       "notify": false,
       "decision": "deny",
-      "ref": "§7 steps 4a-4b, I1",
+      "ref": "§7 step 4e, I2",
       "stage": "verify",
-      "detail": "aat: chain[9]: aat: del_depth (9) exceeds del_max_depth (8) (§4.3 I2) (§7 steps 4a-4b, I1)",
+      "detail": "aat: chain[9]: core: child del_depth 9 exceeds parent del_max_depth 8 (§7 step 4e, I2)",
       "same_scope": [
         1,
         2,
@@ -963,9 +963,9 @@
       ],
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 819,
-      "latency_us": 819,
+      "ref_mismatch": false,
+      "overhead_us": 814,
+      "latency_us": 814,
       "upstream_us": 0
     },
     {
@@ -982,12 +982,12 @@
       "decision": "deny",
       "ref": "§7 step 4h, I3",
       "stage": "verify",
-      "detail": "aat: chain[1]: core: child exp 1788033064 outlives parent exp 1787950264 (§7 step 4h, I3)",
+      "detail": "aat: chain[1]: core: child exp 1788049843 outlives parent exp 1787967043 (§7 step 4h, I3)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 159,
-      "latency_us": 159,
+      "overhead_us": 168,
+      "latency_us": 168,
       "upstream_us": 0
     },
     {
@@ -1004,7 +1004,7 @@
       "decision": "deny",
       "ref": "§7 step 4j, I3",
       "stage": "verify",
-      "detail": "aat: chain[1]: core: child iat 1787846664 precedes parent iat 1787946604 (§7 step 4j, I3)",
+      "detail": "aat: chain[1]: core: child iat 1787863443 precedes parent iat 1787963383 (§7 step 4j, I3)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
@@ -1026,12 +1026,12 @@
       "decision": "deny",
       "ref": "§7 step 4i, I3",
       "stage": "verify",
-      "detail": "aat: chain[1]: core: child exp 1787943064 is not after now 1787946665 (§7 step 4i, I3)",
+      "detail": "aat: chain[1]: core: child exp 1787959843 is not after now 1787963443 (§7 step 4i, I3)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 163,
-      "latency_us": 163,
+      "overhead_us": 160,
+      "latency_us": 160,
       "upstream_us": 0
     },
     {
@@ -1053,8 +1053,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 162,
-      "latency_us": 162,
+      "overhead_us": 172,
+      "latency_us": 172,
       "upstream_us": 0
     },
     {
@@ -1076,8 +1076,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 177,
-      "latency_us": 177,
+      "overhead_us": 176,
+      "latency_us": 176,
       "upstream_us": 0
     },
     {
@@ -1098,8 +1098,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 183,
-      "latency_us": 183,
+      "overhead_us": 388,
+      "latency_us": 388,
       "upstream_us": 0
     },
     {
@@ -1121,8 +1121,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 167,
-      "latency_us": 167,
+      "overhead_us": 207,
+      "latency_us": 207,
       "upstream_us": 0
     },
     {
@@ -1144,8 +1144,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 228,
-      "latency_us": 228,
+      "overhead_us": 595,
+      "latency_us": 595,
       "upstream_us": 0
     },
     {
@@ -1163,12 +1163,12 @@
       "decision": "deny",
       "ref": "§7 step 4q, I5",
       "stage": "verify",
-      "detail": "aat: chain[1] par_hash \"fMKCfZAbPXtYtVY46cSN6uslFmpslYEl7ketiW9dw9M\" does not match SHA-256 of the parent signing input \"vfV96x4CT_gzBpV_mK4Q3entPYrV9PJvTuHi7YJO5EA\" (§7 step 4q, I5)",
+      "detail": "aat: chain[1] par_hash \"ZQNA6RGgPpRemVonU9Bekx0YB6obFaVwsrpBe-flQ_o\" does not match SHA-256 of the parent signing input \"zD5GrddNq9s2NacMQSVRWZuOKtDDkI-gV3YBlg2dtDA\" (§7 step 4q, I5)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 204,
-      "latency_us": 204,
+      "overhead_us": 228,
+      "latency_us": 228,
       "upstream_us": 0
     },
     {
@@ -1186,12 +1186,12 @@
       "decision": "deny",
       "ref": "§7 step 4q, I5",
       "stage": "verify",
-      "detail": "aat: chain[1] par_hash \"PyA8mZoWtGDnjkfD3ECVTDEFh5Kf-hOvSxic-P-4F1Q\" does not match SHA-256 of the parent signing input \"yCqrvk_l1Cnv948muplj_0P_chd0mu6_v1sysI6H-GU\" (§7 step 4q, I5)",
+      "detail": "aat: chain[1] par_hash \"enUQJQ1GZOpVbyYZwHUctGFTNyHGYG1kROxnLEROJ8U\" does not match SHA-256 of the parent signing input \"sXmn9h4Mnu7XgyCyLt1tWZ9eqnPwKcnkoVZ_G7uX0T8\" (§7 step 4q, I5)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 408,
-      "latency_us": 408,
+      "overhead_us": 187,
+      "latency_us": 187,
       "upstream_us": 0
     },
     {
@@ -1207,14 +1207,14 @@
       "depth": 2,
       "notify": false,
       "decision": "deny",
-      "ref": "§7 steps 4a-4b, I1",
+      "ref": "§7 step 4b5",
       "stage": "verify",
-      "detail": "aat: chain[1]: aat: par_hash MUST be present in derived tokens (§3.2 Table 1) (§7 steps 4a-4b, I1)",
+      "detail": "aat: chain[1]: par_hash MUST be present on a derived token (§3.2 Table 1) (§7 step 4b5)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 203,
-      "latency_us": 203,
+      "ref_mismatch": false,
+      "overhead_us": 178,
+      "latency_us": 178,
       "upstream_us": 0
     },
     {
@@ -1236,8 +1236,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 797,
-      "latency_us": 797,
+      "overhead_us": 215,
+      "latency_us": 215,
       "upstream_us": 0
     },
     {
@@ -1254,12 +1254,12 @@
       "decision": "deny",
       "ref": "§7 step 7c",
       "stage": "verify",
-      "detail": "aat: PoP aat_id \"01957a41-0081-7c20-bf3a-ffffffffffff\" is not the leaf jti \"01957a41-0081-7c20-bf3a-0000000000bf\" (§7 step 7c)",
+      "detail": "aat: PoP aat_id \"01957a41-0081-7c20-bf3a-ffffffffffff\" is not the leaf jti \"01957a41-0081-7c20-bf3a-0000000000b9\" (§7 step 7c)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 585,
-      "latency_us": 585,
+      "overhead_us": 234,
+      "latency_us": 234,
       "upstream_us": 0
     },
     {
@@ -1281,8 +1281,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 549,
-      "latency_us": 549,
+      "overhead_us": 216,
+      "latency_us": 216,
       "upstream_us": 0
     },
     {
@@ -1304,8 +1304,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 572,
-      "latency_us": 572,
+      "overhead_us": 222,
+      "latency_us": 222,
       "upstream_us": 0
     },
     {
@@ -1322,12 +1322,12 @@
       "decision": "deny",
       "ref": "§7 step 7g, §5.3",
       "stage": "verify",
-      "detail": "aat: PoP iat 1787943064 is -3601s from now 1787946665, outside the ±30s tolerance (§7 step 7g, §5.3)",
+      "detail": "aat: PoP iat 1787959843 is -3600s from now 1787963443, outside the ±30s tolerance (§7 step 7g, §5.3)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 605,
-      "latency_us": 605,
+      "overhead_us": 223,
+      "latency_us": 223,
       "upstream_us": 0
     },
     {
@@ -1344,12 +1344,12 @@
       "decision": "deny",
       "ref": "§7 step 7g, §5.3",
       "stage": "verify",
-      "detail": "aat: PoP iat 1787950264 is 3599s from now 1787946665, outside the ±30s tolerance (§7 step 7g, §5.3)",
+      "detail": "aat: PoP iat 1787967043 is 3600s from now 1787963443, outside the ±30s tolerance (§7 step 7g, §5.3)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 578,
-      "latency_us": 578,
+      "overhead_us": 215,
+      "latency_us": 215,
       "upstream_us": 0
     },
     {
@@ -1369,9 +1369,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 562,
-      "latency_us": 640,
-      "upstream_us": 78
+      "overhead_us": 241,
+      "latency_us": 281,
+      "upstream_us": 39
     },
     {
       "name": "pop-replay-within-skew",
@@ -1390,9 +1390,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 277,
-      "latency_us": 305,
-      "upstream_us": 27
+      "overhead_us": 218,
+      "latency_us": 232,
+      "upstream_us": 13
     },
     {
       "name": "prefix-presentation-escalates",
@@ -1413,8 +1413,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 512,
-      "latency_us": 512,
+      "overhead_us": 216,
+      "latency_us": 216,
       "upstream_us": 0
     },
     {
@@ -1435,8 +1435,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 200,
-      "latency_us": 200,
+      "overhead_us": 93,
+      "latency_us": 93,
       "upstream_us": 0
     },
     {
@@ -1458,8 +1458,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 144,
-      "latency_us": 144,
+      "overhead_us": 98,
+      "latency_us": 98,
       "upstream_us": 0
     },
     {
@@ -1480,8 +1480,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 27,
-      "latency_us": 27,
+      "overhead_us": 18,
+      "latency_us": 18,
       "upstream_us": 0
     },
     {
@@ -1502,8 +1502,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 196,
-      "latency_us": 196,
+      "overhead_us": 166,
+      "latency_us": 166,
       "upstream_us": 0
     },
     {
@@ -1524,8 +1524,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 204,
-      "latency_us": 204,
+      "overhead_us": 182,
+      "latency_us": 182,
       "upstream_us": 0
     },
     {
@@ -1549,8 +1549,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 182,
-      "latency_us": 182,
+      "overhead_us": 174,
+      "latency_us": 174,
       "upstream_us": 0
     },
     {
@@ -1571,8 +1571,8 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 205,
-      "latency_us": 205,
+      "overhead_us": 183,
+      "latency_us": 183,
       "upstream_us": 0
     },
     {
@@ -1594,8 +1594,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 188,
-      "latency_us": 188,
+      "overhead_us": 174,
+      "latency_us": 174,
       "upstream_us": 0
     },
     {
@@ -1611,12 +1611,12 @@
       "depth": 2,
       "notify": false,
       "decision": "deny",
-      "ref": "§7",
+      "ref": "§3.4",
       "stage": "verify",
-      "detail": "aat: chain[1]: core: tool \"echo\": argument \"text\": constraint exact: unrecognized member \"case_sensitive\"",
+      "detail": "aat: chain[1]: core: tool \"echo\": argument \"text\": constraint exact: unrecognized member \"case_sensitive\" (§3.4)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
+      "ref_mismatch": false,
       "overhead_us": 171,
       "latency_us": 171,
       "upstream_us": 0
@@ -1634,14 +1634,14 @@
       "depth": 2,
       "notify": false,
       "decision": "deny",
-      "ref": "§7",
+      "ref": "§3.4",
       "stage": "verify",
-      "detail": "aat: chain[1]: core: tool \"echo\": argument \"text\": constraint all: constraints: must contain at least one clause",
+      "detail": "aat: chain[1]: core: tool \"echo\": argument \"text\": constraint all: constraints: must contain at least one clause (§3.4)",
       "wire_code": -32001,
       "ok": true,
-      "ref_mismatch": true,
-      "overhead_us": 166,
-      "latency_us": 166,
+      "ref_mismatch": false,
+      "overhead_us": 221,
+      "latency_us": 221,
       "upstream_us": 0
     },
     {
@@ -1663,8 +1663,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 654,
-      "latency_us": 654,
+      "overhead_us": 616,
+      "latency_us": 616,
       "upstream_us": 0
     },
     {
@@ -1688,8 +1688,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 529,
-      "latency_us": 529,
+      "overhead_us": 239,
+      "latency_us": 239,
       "upstream_us": 0
     },
     {
@@ -1705,12 +1705,12 @@
       "decision": "deny",
       "ref": "§7 step 2c, cycle detection",
       "stage": "verify",
-      "detail": "aat: jti \"01957a41-0081-7c20-bf3a-0000000000fb\" appears more than once in the presented chain (§7 step 2c, cycle detection)",
+      "detail": "aat: jti \"01957a41-0081-7c20-bf3a-0000000000f5\" appears more than once in the presented chain (§7 step 2c, cycle detection)",
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 46,
-      "latency_us": 46,
+      "overhead_us": 34,
+      "latency_us": 34,
       "upstream_us": 0
     },
     {
@@ -1731,8 +1731,8 @@
       "wire_code": -32001,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 497,
-      "latency_us": 497,
+      "overhead_us": 511,
+      "latency_us": 511,
       "upstream_us": 0
     },
     {
@@ -1751,9 +1751,9 @@
       "wire_code": 0,
       "ok": true,
       "ref_mismatch": false,
-      "overhead_us": 647,
-      "latency_us": 789,
-      "upstream_us": 141
+      "overhead_us": 229,
+      "latency_us": 257,
+      "upstream_us": 27
     }
   ]
 }

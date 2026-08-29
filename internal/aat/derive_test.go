@@ -201,7 +201,15 @@ func TestDeriveRefusesAttenuationViolations(t *testing.T) {
 		{"I3 outlives parent", func(dv *Derivation) { dv.Expires = chainNow + 7200 }, "step 4h, I3"},
 		{"I3 predates parent", func(dv *Derivation) { dv.IssuedAt = chainNow - 500 }, "step 4j, I3"},
 		{"I3 already expired", func(dv *Derivation) { dv.Expires = chainNow - 1 }, "step 4i, I3"},
-		{"I4 adds a tool", func(dv *Derivation) { dv.Tools = toolMap(t, rootTools) }, "step 4p1, I4"},
+		// midTools plus one tool the parent does not grant, and nothing else
+		// changed. Handing it rootTools would ALSO widen read_file.path, and
+		// CheckI4 walks a map: which of the two violations it reports first is
+		// then whichever the runtime iterates first.
+		{"I4 adds a tool", func(dv *Derivation) {
+			dv.Tools = toolMap(t, `{"read_file":{"path":{"constraint_type":"one_of",`+
+				`"values":["/data/q3.pdf","/data/q4.pdf"]},`+
+				`"mode":{"constraint_type":"exact","value":"r"}},"list_dir":{}}`)
+		}, "step 4p1, I4"},
 		{"I4 widens a constraint", func(dv *Derivation) {
 			dv.Tools = toolMap(t, `{"read_file":{"path":{"constraint_type":"one_of","values":`+
 				`["/data/q3.pdf","/etc/shadow"]},"mode":{"constraint_type":"exact","value":"r"}}}`)
@@ -370,8 +378,13 @@ func TestForgedLeafIsDeniedAtVerify(t *testing.T) {
 		{"I2 ceiling raised", nil, func(c *Claims) { c.MaxDelegationDepth = 7 }, "step 4g, I2"},
 		{"I3 outlives its parent", nil, func(c *Claims) { c.Expires = chainNow + 7200 }, "step 4h, I3"},
 		{"I3 predates its parent", nil, func(c *Claims) { c.IssuedAt = chainNow - 500 }, "step 4j, I3"},
+		// leafTools plus the tool its parent dropped, and nothing else: handing
+		// it rootTools would ALSO widen read_file.path, and CheckI4 walks a map,
+		// so which violation surfaces first is whichever the runtime iterates.
 		{"I4 regains a dropped tool", nil, func(c *Claims) {
-			c.AuthorizationDetails = details(caps(rootTools))
+			c.AuthorizationDetails = details(caps(
+				`{"read_file":{"path":{"constraint_type":"exact","value":"/data/q3.pdf"},` +
+					`"mode":{"constraint_type":"exact","value":"r"}},"list_dir":{}}`))
 		}, "step 4p1, I4"},
 		{"I4 widens a constraint", nil, func(c *Claims) {
 			// Reaching past the mid token's one_of, not merely back up to it:

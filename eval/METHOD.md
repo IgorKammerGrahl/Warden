@@ -132,10 +132,15 @@ warden currently does. Blocks then partition three ways:
 ref with a precise message is a different defect from a ref that names a rule
 not true of the input, and the two are indistinguishable from refs alone.
 
-## Findings: the eight blocks attributed wrongly
+## Findings: the eight blocks attributed wrongly (M4), and their fix (M4b)
 
-All eight stop the call. None is a security failure; all eight are failures of
-SPEC contribution 3, the decision trace.
+M4's first run blocked 54 of 54 and attributed 46 of them — 85.2%. The eight
+misses are recorded below as they were found; M4b fixed all eight and the
+current run reads 100% / 100%. Read the diagnosis, not just the number: what
+made the eight wrong is the part that generalizes.
+
+All eight stopped the call. None was a security failure; all eight were
+failures of SPEC contribution 3, the decision trace.
 
 **Six wrong-clause rows have one cause.** `internal/aat/chain.go:158` wraps
 every error out of `verifyThenParse` in `Deny("§7 steps 4a-4b, I1", …)` and
@@ -179,6 +184,38 @@ is told about the row it was inferred into:
 with a plain error and no `Denial`, so the trace falls to the `§7` floor where
 `§3.4` was wanted. The messages are precise and operator-readable; only the
 machine-readable ref is missing.
+
+### What M4b changed
+
+The fix mostly *removed* checks. `internal/core/chain.go` already carried every
+wanted ref — `§7 step 3c`, `§7 step 4d, I2`, `§7 step 4e, I2` — and never got to
+run, because a coarser check upstream answered first with a worse citation.
+
+1. `verifyThenParse` is split. `verifySignature` does §7's algorithm-then-
+   signature ordering and keeps the coarse `3a-3b` / `4a-4b` ref, which five
+   cases legitimately want. Parsing is now the caller's separate step under its
+   own clause: `§7 step 3b` for the root, `§7 steps 4b1-4b5` for a link. A claim
+   defect no longer reads as a key-binding failure.
+2. `Claims.validate` no longer infers position from `del_depth == 0`. The
+   par_hash-presence rule and the `del_depth <= del_max_depth` bound left it
+   entirely; §7 asks them where the position is known — steps 3d and 4b5 for
+   presence, 4d/4e/4m for depth. The same inference stayed in `Mint`, where it
+   is sound: the caller authored those claims, so the two fields cannot disagree
+   the way an attacker's can, and warden should not sign what it would deny.
+   The derived-`iss` thumbprint-prefix test went too — §7 step 4c compares
+   `iss` against the parent holder key's actual thumbprint, which is strictly
+   stronger and cites I1 correctly.
+3. Seven structural failures in `core`'s constraint parser became
+   `Deny("§3.4", …)`. That closed the uncited class, not just the two rows.
+4. One corpus case was confounded: `root-carries-par_hash` forged a par_hash
+   that was also not base64url, so Table 1's shape rule (position-independent,
+   correctly checked at parse) fired before the positional prohibition. The
+   forged value is now well-formed; the shape rule keeps its own unit test.
+   No expectation was relabelled.
+
+The two toy chain fixtures that widened a constraint *and* added a tool in one
+mutation were narrowed for the same reason: `CheckI4` walks a map, so a case
+with two violations reports whichever the runtime iterates first.
 
 ## Documented non-blocks
 

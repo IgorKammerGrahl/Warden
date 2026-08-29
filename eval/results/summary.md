@@ -31,35 +31,9 @@ still stops the call and still misleads the operator reading the log.
 
 | outcome | share |
 |---|---|
-| blocked and correctly attributed |  85.2%  (46/54) |
-| blocked, cited a different clause |  11.1%  (6/54) |
-| blocked, uncited (fell to the stage floor) |   3.7%  (2/54) |
-
-### Blocked but wrong clause
-
-Two different defects share this row, and the message column separates them:
-a ref that is coarser than the wanted step but still contains it, and a ref
-that names something not true of the input at all. Read the message beside
-the ref before treating a row as either.
-
-| case | cited | true of this input | what the operator reads |
-|---|---|---|---|
-| root-carries-par_hash | `§7 steps 3a-3b, I1` | `§7 step 3d` | aat: root verifies under no trust anchor: aat: par_hash MUST be absent in root tokens (§3.2 Table 1) (§7 steps 3a-3b, I1) |
-| root-nonzero-del_depth | `§7 steps 3a-3b, I1` | `§7 step 3c` | aat: root verifies under no trust anchor: aat: par_hash MUST be present in derived tokens (§3.2 Table 1) (§7 steps 3a-3b, I1) |
-| i2-depth-not-incremented | `§7 steps 4a-4b, I1` | `§7 step 4d, I2` | aat: chain[1]: aat: par_hash MUST be absent in root tokens (§3.2 Table 1) (§7 steps 4a-4b, I1) |
-| i2-terminal-parent-delegates | `§7 steps 4a-4b, I1` | `§7 step 4e, I2` | aat: chain[2]: aat: del_depth (2) exceeds del_max_depth (1) (§4.3 I2) (§7 steps 4a-4b, I1) |
-| i2-chain-beyond-deployment-max | `§7 steps 4a-4b, I1` | `§7 step 4e, I2` | aat: chain[9]: aat: del_depth (9) exceeds del_max_depth (8) (§4.3 I2) (§7 steps 4a-4b, I1) |
-| i5-par_hash-omitted-on-derived | `§7 steps 4a-4b, I1` | `§7 step 4b5` | aat: chain[1]: aat: par_hash MUST be present in derived tokens (§3.2 Table 1) (§7 steps 4a-4b, I1) |
-
-### Blocked but uncited
-
-The trace fell to its stage floor: the refusal carries no `core.Denial`,
-so the operator is told which stage refused and not which clause.
-
-| case | cited | true of this input | what the operator reads |
-|---|---|---|---|
-| unrecognized-member-in-constraint | `§7` | `§3.4` | aat: chain[1]: core: tool "echo": argument "text": constraint exact: unrecognized member "case_sensitive" |
-| empty-constraints-array | `§7` | `§3.4` | aat: chain[1]: core: tool "echo": argument "text": constraint all: constraints: must contain at least one clause |
+| blocked and correctly attributed | 100.0%  (54/54) |
+| blocked, cited a different clause |   0.0%  (0/54) |
+| blocked, uncited (fell to the stage floor) |   0.0%  (0/54) |
 
 ## Expected non-blocks
 
@@ -117,13 +91,13 @@ pipe transit both ways, booked to the server's column by convention.
 
 | config | depth | n | total p50 | total p99 | upstream p50 | overhead p50 | overhead p99 |
 |---|---|---|---|---|---|---|---|
-| enforcing | 1 | 200 | 0.169 ms | 0.709 ms | 0.020 ms | 0.143 ms | 0.649 ms |
-| enforcing | 3 | 200 | 0.557 ms | 1.246 ms | 0.054 ms | 0.507 ms | 1.222 ms |
-| enforcing | 5 | 200 | 0.592 ms | 1.501 ms | 0.057 ms | 0.530 ms | 1.413 ms |
-| passthrough-bound | 1 | 200 | 0.027 ms | 0.068 ms | 0.013 ms | 0.012 ms | 0.033 ms |
-| passthrough-bound | 3 | 200 | 0.034 ms | 0.100 ms | 0.015 ms | 0.017 ms | 0.055 ms |
-| passthrough-bound | 5 | 200 | 0.041 ms | 0.100 ms | 0.016 ms | 0.022 ms | 0.056 ms |
-| passthrough-bare | 0 | 200 | 0.017 ms | 0.072 ms | 0.010 ms | 0.007 ms | 0.019 ms |
+| enforcing | 1 | 200 | 0.168 ms | 0.513 ms | 0.019 ms | 0.146 ms | 0.474 ms |
+| enforcing | 3 | 200 | 0.331 ms | 0.855 ms | 0.026 ms | 0.303 ms | 0.785 ms |
+| enforcing | 5 | 200 | 0.529 ms | 1.204 ms | 0.042 ms | 0.476 ms | 1.149 ms |
+| passthrough-bound | 1 | 200 | 0.031 ms | 0.077 ms | 0.014 ms | 0.013 ms | 0.035 ms |
+| passthrough-bound | 3 | 200 | 0.043 ms | 0.125 ms | 0.018 ms | 0.024 ms | 0.105 ms |
+| passthrough-bound | 5 | 200 | 0.039 ms | 0.088 ms | 0.017 ms | 0.021 ms | 0.063 ms |
+| passthrough-bare | 0 | 200 | 0.018 ms | 0.062 ms | 0.011 ms | 0.007 ms | 0.029 ms |
 
 The upstream is eval's own in-process test server answering in tens of
 microseconds. Any percentage of total computed from these rows is a statement

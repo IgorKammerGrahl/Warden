@@ -145,17 +145,36 @@ func (v *Verifier) VerifyReport(chain []string, tool string, args map[string]any
 	if err := core.CheckRoot(rootDom, now, v.Limits); err != nil {
 		return rep, err
 	}
+	// 3d. Position, not shape: par_hash is forbidden here because this token is
+	// chain[0], which is the only thing that makes it a root.
+	if rootTok.Claims.ParentHash != "" {
+		return rep, core.Deny("§7 step 3d",
+			"aat: root carries par_hash %q; §3.2 Table 1 forbids it on a root token",
+			rootTok.Claims.ParentHash)
+	}
 
-	// Step 4. Steps 3d (par_hash absent from the root), 4b1-4b5 and the
-	// public-key shape of 3l/4b2 are enforced inside Parse, which every token
-	// here goes through after its signature verifies.
+	// Step 4. The public-key shape of 4b2 and the claim-presence half of
+	// 4b1-4b5 are enforced inside Parse, which every token here goes through
+	// after its signature verifies.
 	parentTok, parentDom := rootTok, rootDom
 	for i := 1; i < len(chain); i++ {
 		// 4a, 4b: the child is signed by the parent's holder key, so choosing
 		// that key is what step 4 does and why the loop cannot be reordered.
-		childTok, err := verifyThenParse(chain[i], parentTok.Claims.Confirmation.JWK)
-		if err != nil {
+		if err := verifySignature(chain[i], parentTok.Claims.Confirmation.JWK); err != nil {
 			return rep, core.Deny("§7 steps 4a-4b, I1", "aat: chain[%d]: %w", i, err)
+		}
+		// 4b1-4b5: "after signature verification, verify required claims are
+		// present". A claim defect is not a key-binding defect, and citing 4a-4b
+		// for one tells the operator the signature failed when it verified.
+		childTok, err := Parse(chain[i])
+		if err != nil {
+			return rep, core.Deny("§7 steps 4b1-4b5", "aat: chain[%d]: %w", i, err)
+		}
+		// 4b5, the half Parse cannot answer: par_hash is REQUIRED here because
+		// this token has a parent, not because of anything in its own claims.
+		if childTok.Claims.ParentHash == "" {
+			return rep, core.Deny("§7 step 4b5",
+				"aat: chain[%d]: par_hash MUST be present on a derived token (§3.2 Table 1)", i)
 		}
 		// 4n, 4o.
 		childDom, err := project(childTok)
@@ -217,43 +236,57 @@ func (v *Verifier) verifyRoot(compact string) (*Token, error) {
 		return nil, core.Deny("§7 step 3b", "aat: no trust anchors configured")
 	}
 	var last error
+	anchored := false
 	for _, anchor := range v.TrustAnchors {
-		tok, err := verifyThenParse(compact, anchor)
-		if err == nil {
-			return tok, nil
+		if err := verifySignature(compact, anchor); err == nil {
+			anchored = true
+			break
+		} else {
+			last = err
 		}
-		last = err
 	}
-	return nil, core.Deny("§7 steps 3a-3b, I1", "aat: root verifies under no trust anchor: %w", last)
+	if !anchored {
+		return nil, core.Deny("§7 steps 3a-3b, I1",
+			"aat: root verifies under no trust anchor: %w", last)
+	}
+	// 3b, second sentence: "After signature verification succeeds, parse the
+	// root token's claims." Kept separate from the loop above so a malformed
+	// root is not reported as an untrusted one — and so the operator is not
+	// handed the last anchor's error for a token no anchor was ever the problem
+	// with.
+	tok, err := Parse(compact)
+	if err != nil {
+		return nil, core.Deny("§7 step 3b", "aat: root: %w", err)
+	}
+	return tok, nil
 }
 
-// verifyThenParse enforces §7's ordering for one token: signature first, claims
-// after.
+// verifySignature enforces §7's ordering for one token: algorithm, then
+// signature. Parsing the claims is the caller's next step and a different
+// clause — 3b's second sentence for the root, 4b1-4b5 for a link — so the two
+// failures never share one citation.
 //
 // jws.Parse splits the compact serialization and decodes the protected header.
 // That is not the "application-layer claim deserialization" the step-8 note
 // defers — the payload comes back as bytes, and nothing reads a claim out of it
 // until Parse runs, which is after ed25519.Verify has succeeded over exactly
 // those bytes.
-func verifyThenParse(compact string, key *JWK) (*Token, error) {
+func verifySignature(compact string, key *JWK) error {
 	msg, err := jws.Parse(compact)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// Before the signature check, not after: §7 requires denial on an
 	// alg/key-type mismatch regardless of whether the bytes would verify under
 	// an alternate interpretation.
 	if err := key.checkAlgorithm(msg.Header.Alg); err != nil {
-		return nil, err
+		return err
 	}
 	pub, err := key.PublicKey()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := msg.Verify(pub); err != nil {
-		return nil, err
-	}
-	return Parse(compact)
+	return msg.Verify(pub)
 }
 
 // project maps a verified token onto the domain. The thumbprint URI is computed
