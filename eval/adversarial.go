@@ -542,6 +542,87 @@ func adversarialCases(w *world) []Case {
 			"today, and no §3.4 core constraint type expresses a call budget.",
 	}, base(), goodArgs))
 
+	// ------------------------------------------------- framing, T1 (§3.2)
+	//
+	// The class that got past 54 adversarial cases at a 100% block rate.
+	// inspect decoded a client message into one struct, any failure returned
+	// nil, and nil meant "relay it" — so every shape that failed that decode
+	// reached the upstream having never been authorized. It lived only in the
+	// unit suite until now, which is how it was missed: eval/ is what produces
+	// the block-rate number, and a regression the corpus cannot express does
+	// not appear in it.
+	//
+	// These are warden-profile. draft-01 defines no MCP binding and says
+	// nothing about JSON-RPC framing, so the clause being cited is
+	// ARCHITECTURE §3.2's fail-closed rule: a message the proxy cannot fully
+	// classify is denied, never forwarded.
+	//
+	// "Must not reach the upstream" needs no field of its own. A forwarded
+	// message produces no audit record — that is precisely what made the
+	// original bug invisible — and runCorpus's join aborts the whole run on a
+	// record count that does not match the calls presented. The oracle is the
+	// join, and it fails hard rather than reporting a result.
+	//
+	// Tool is "" on the frame cases, and that is an assertion too: the join
+	// cross-checks the record's tool against the case's, so a record naming
+	// any tool at all fails the run. Warden refused the frame without opening
+	// the message, and must not claim to know what was inside it.
+	frame := func(k Case, raw string) Case {
+		k.Corpus, k.Class, k.Profile = "adversarial", "T1", "warden"
+		k.Expect, k.WantRef = "deny", "ARCHITECTURE §3.2"
+		k.Raw = json.RawMessage(raw)
+		return k
+	}
+
+	// A batch wrapping a call that would otherwise be permitted. The binding
+	// is real and complete, so a denial here can only be about the frame.
+	batched := base()
+	add(frame(Case{Name: "frame-batch-tools-call",
+		Note: "a tools/call in a one-element JSON-RPC batch array. The inner call is fully " +
+			"bound and would be permitted on its own; the array is what is refused. Not " +
+			"exploitable against a server that drops batches (MCP removed them in " +
+			"2025-06-18) and a full bypass against one that honours them (MCP 2025-03-26 " +
+			"required them).",
+	}, `[{"jsonrpc":"2.0","id":901,"method":"tools/call","params":{"name":"echo",`+
+		`"arguments":`+goodArgs+`,"_meta":`+string(batched.bind("echo", json.RawMessage(goodArgs)))+`}}]`))
+
+	// The refusal is of the array, not of what is in it.
+	add(frame(Case{Name: "frame-batch-benign-only",
+		Note: "a batch holding no tools/call at all — a tools/list and a notification, both " +
+			"of which warden relays untouched when they arrive on their own. Refused all " +
+			"the same, which is the assertion: warden refuses the array without opening " +
+			"it, so the decision cannot depend on the contents.",
+	}, `[{"jsonrpc":"2.0","id":902,"method":"tools/list","params":{}},`+
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}]`))
+
+	// The siblings. Same defect, no array in sight: an ordinary tools/call
+	// with one member of the wrong JSON type.
+	add(frame(Case{Name: "frame-params-not-an-object",
+		Note: "params is a string. The message names tools/call, so it is not some other " +
+			"message to be relayed — it is a tools/call whose shape warden cannot read, " +
+			"and forwarding it would authorize nothing.",
+	}, `{"jsonrpc":"2.0","id":903,"method":"tools/call","params":"notanobject"}`))
+
+	add(frame(Case{Name: "frame-name-not-a-string",
+		Note: "params.name is a number. Warden cannot say which tool was invoked, so it " +
+			"cannot decide about it, so it refuses it.",
+	}, `{"jsonrpc":"2.0","id":904,"method":"tools/call","params":{"name":123,"arguments":{}}}`))
+
+	// _meta of the wrong shape is NOT a framing failure: the message is a
+	// readable tools/call, so it reaches bind and is denied there, on its own
+	// id, citing the clause that actually governs it. ARCHITECTURE §3.1 lists
+	// "an empty array" beside "_meta absent entirely" as a fail-closed case,
+	// and before the frame rule went in this reached the upstream instead —
+	// the same bypass, against a documented requirement.
+	add(Case{Name: "bind-meta-not-an-object", Class: "T1", Profile: "warden",
+		Corpus: "adversarial", Expect: "deny", Tool: "echo",
+		Args: json.RawMessage(goodArgs), Meta: json.RawMessage(`[]`),
+		WantRef: "ARCHITECTURE §3.1",
+		Note: "params._meta is an array. Readable as a tools/call, so it is classified and " +
+			"denied at bind rather than refused at the frame — the finest true citation " +
+			"is §3.1, which names this shape.",
+	})
+
 	return out
 }
 

@@ -57,6 +57,12 @@ type Case struct {
 	// than turned into a third decision.
 	WantSameScope []int `json:"want_same_scope,omitempty"`
 
+	// Raw is the exact bytes to put on the wire, bypassing the tools/call
+	// construction below. It exists for cases whose whole point is a message
+	// shape a tools/call cannot express — a batch array, a params that is not
+	// an object — which is the class the batch bypass came from.
+	Raw json.RawMessage `json:"-"`
+
 	// Notify sends the call as a JSON-RPC notification: no id, so no response
 	// can be correlated. See the notification-bypass case.
 	Notify bool `json:"notify"`

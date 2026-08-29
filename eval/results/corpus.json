@@ -908,5 +908,65 @@
     "tool": "echo",
     "depth": 2,
     "notify": false
+  },
+  {
+    "name": "frame-batch-tools-call",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.2",
+    "note": "a tools/call in a one-element JSON-RPC batch array. The inner call is fully bound and would be permitted on its own; the array is what is refused. Not exploitable against a server that drops batches (MCP removed them in 2025-06-18) and a full bypass against one that honours them (MCP 2025-03-26 required them).",
+    "tool": "",
+    "depth": 0,
+    "notify": false
+  },
+  {
+    "name": "frame-batch-benign-only",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.2",
+    "note": "a batch holding no tools/call at all — a tools/list and a notification, both of which warden relays untouched when they arrive on their own. Refused all the same, which is the assertion: warden refuses the array without opening it, so the decision cannot depend on the contents.",
+    "tool": "",
+    "depth": 0,
+    "notify": false
+  },
+  {
+    "name": "frame-params-not-an-object",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.2",
+    "note": "params is a string. The message names tools/call, so it is not some other message to be relayed — it is a tools/call whose shape warden cannot read, and forwarding it would authorize nothing.",
+    "tool": "",
+    "depth": 0,
+    "notify": false
+  },
+  {
+    "name": "frame-name-not-a-string",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.2",
+    "note": "params.name is a number. Warden cannot say which tool was invoked, so it cannot decide about it, so it refuses it.",
+    "tool": "",
+    "depth": 0,
+    "notify": false
+  },
+  {
+    "name": "bind-meta-not-an-object",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.1",
+    "note": "params._meta is an array. Readable as a tools/call, so it is classified and denied at bind rather than refused at the frame — the finest true citation is §3.1, which names this shape.",
+    "tool": "echo",
+    "depth": 0,
+    "notify": false
   }
 ]

@@ -1,6 +1,6 @@
 # warden — STATE
 
-Updated: 2026-08-29 (real-peer shakedown — one bypass fixed, NOTES 11 filed)
+Updated: 2026-08-29 (post-shakedown hardening — the classification rule, 5 siblings, corpus T1)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
@@ -128,6 +128,105 @@ workload adds is the cost of staying core-only: enumerating the tree as
 `one_of` produced a 15214-byte capability, and that is where the 18x
 enforcement overhead came from. Deployment-guide material, not NOTES material.
 Same for the missing element-wise combinator and object-argument vocabulary.
+
+## The fail-closed classification rule (2026-08-29)
+
+**In enforcing mode, a message the proxy cannot fully classify is denied, never
+forwarded. Absence of a positive authorization is a denial, not a pass.**
+
+This is the rule the batch bypass violated, and it is now the whole of the
+check in `clientToServer` — there is deliberately no list of bad shapes to
+maintain, because the bypass was exactly a shape nobody had listed.
+
+`inspect` returns `(*call, known bool)` with three outcomes:
+
+| return | meaning | action |
+|---|---|---|
+| `(c, true)` | a tools/call | decide about it |
+| `(nil, true)` | classified, not a tools/call | relay it |
+| `(nil, false)` | valid JSON warden cannot place | **deny** (enforcing); relay (passthrough) |
+
+The defect was that the second and third outcomes were the same value. One
+`Unmarshal` into one struct, any error returning `nil`, and `nil` meaning
+"relay it". **Do not collapse them again.** If a future change needs a new
+field out of a client message, add it to the stage-2 params struct, not to the
+stage-1 envelope: stage 1 must keep accepting every legal JSON-RPC message, or
+legitimate traffic starts getting refused at the frame.
+
+Passthrough is exempt by design. §3.1 makes M1 the one mode that does not shape
+traffic, and the latency baseline the whole eval is calibrated against is a
+measurement of relaying. `checkPassthroughForwardsBatch` in `eval/run.go` is a
+hard control on that: if passthrough ever starts denying, the eval fails rather
+than quietly reporting overhead numbers measured against a second enforcing
+configuration.
+
+### The sibling audit
+
+Every site in `internal/proxy` where a decode error, a type assertion, a nil
+return or a zero value could reach a forward without a decision was checked.
+**Five live bypasses found, all the same pattern, all fixed by the rule above.**
+Each was an ordinary `tools/call` with one member of the wrong JSON type,
+verified reaching a real upstream before the fix and denied after:
+
+| shape | before | after |
+|---|---|---|
+| `"params": "string"` | forwarded | deny, frame, §3.2 |
+| `"params": [1,2]` | forwarded | deny, frame, §3.2 |
+| `"name": 123` | forwarded | deny, frame, §3.2 |
+| `"_meta": []` | forwarded | deny, **bind, §3.1** |
+| `"_meta": "x"` | forwarded | deny, **bind, §3.1** |
+
+`_meta: []` was the worst of them and is worth remembering specifically.
+ARCHITECTURE §3.1 already listed "an empty array" beside "`_meta` absent
+entirely" as a fail-closed case — so this was not an unspecified corner, it was
+a documented requirement the implementation silently failed, because the parse
+died one layer above the bind stage that implements it. It is also the one a
+real server would have executed: a batch needs an upstream that honours
+batching, but `_meta: []` is an otherwise perfectly ordinary tools/call.
+
+That is why the two rows differ in stage. A malformed `_meta` is *classifiable*
+— it is a readable tools/call — so `inspect` leaves the meta map nil and lets
+bind deny it on its own id, citing §3.1, with the tool named. Only genuinely
+unreadable messages get the frame refusal, which carries a null id and names no
+tool, because the id and the tool are among the things that could not be read.
+**Keep that split.** Routing malformed `_meta` to the frame stage would be
+easier and would cite the wrong clause.
+
+Sites checked and deliberately left alone:
+
+- `responseKey`, `isError` — server→client direction. A decode failure returns
+  the zero value and the message is relayed unpaired. Not an authorization
+  path: nothing server-side is authorized, so there is no decision to skip.
+  Worst case is an unaudited response, not an unauthorized call.
+- `observeMeta` — M1 observation only, errors ignored by design. Enforcing
+  re-reads the same keys in `bind` with meaning attached, and bind is
+  fail-closed.
+- `bind`'s `params.arguments` decode — already denies (`§7 step 7f` for
+  non-canonical numbers, `§3.1` for a non-object). Verified, not changed.
+- `closeIf`'s `io.Closer` assertion — shutdown path, no decision.
+
+### What the eval now covers
+
+`Case.Raw` puts verbatim bytes on the wire, so the corpus can express messages
+a `tools/call` cannot. Five T1 cases use it: `frame-batch-tools-call` (a batch
+wrapping a call that would otherwise be *permitted*, so the refusal can only be
+about the frame), `frame-batch-benign-only` (a batch holding no tools/call at
+all — proves the array is refused without being opened),
+`frame-params-not-an-object`, `frame-name-not-a-string`, and
+`bind-meta-not-an-object`.
+
+"Must not reach the upstream" needed no new assertion: a forwarded message
+produces no audit record, and `runCorpus`'s join aborts on a count mismatch.
+`Tool: ""` on the frame cases is an assertion too — the join cross-checks it,
+so a record claiming to know the tool fails the run.
+
+Run against the pre-fix proxy the corpus does not report a lower block rate; it
+**aborts** — `77 records for 82 presented calls`, the 5 new cases vanishing
+exactly as the original bug did. Post-fix: **59/59 blocked, 59/59 correctly
+attributed, 0/19 false positives.** `internal/testserver` now answers an
+unreadable message with `-32600` instead of ending the stream, so a forwarded
+batch is a distinguishable wire code rather than a dead upstream cascading into
+every later case.
 
 ## Repository layout
 

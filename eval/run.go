@@ -108,6 +108,13 @@ func (w *wardend) handshake() error {
 // invoke presents one case. It returns the wire response, or the zero value
 // for a notification, which by construction has none.
 func (w *wardend) invoke(k Case) (rpcResponse, error) {
+	if k.Raw != nil {
+		// Sent verbatim. The id inside it, if any, is the case's own: warden
+		// is expected to refuse these without opening them far enough to read
+		// an id, so there is nothing here to correlate.
+		w.id++
+		return w.call(k.Raw)
+	}
 	params := map[string]json.RawMessage{
 		"name":      mustMarshal(k.Tool),
 		"arguments": k.Args,
@@ -384,4 +391,41 @@ func buildWardend(dir string) (string, error) {
 		return "", fmt.Errorf("build wardend: %w", err)
 	}
 	return bin, nil
+}
+
+// checkPassthroughForwardsBatch is the §3.1 control for the framing cases.
+//
+// Enforcing mode refuses a message it cannot classify. Passthrough must NOT:
+// M1 is the one mode that does not shape traffic, and the latency baseline the
+// whole report is calibrated against is a measurement of relaying, not of
+// deciding. If this ever starts denying, the control has quietly become a
+// second enforcing configuration and every overhead number in the report is
+// measured against the wrong thing.
+//
+// The upstream answers an unreadable message with -32600. So -32600 here means
+// warden relayed the batch, which is the expected result; -32001 would mean
+// warden decided about it.
+func checkPassthroughForwardsBatch(bin, dir string) (string, error) {
+	w, err := startWardend(bin, filepath.Join(dir, "control-audit.jsonl"), "-passthrough-only")
+	if err != nil {
+		return "", err
+	}
+	defer w.close()
+	resp, err := w.call(json.RawMessage(
+		`[{"jsonrpc":"2.0","id":9001,"method":"tools/call","params":{"name":"echo","arguments":{"text":"ping"}}}]`))
+	if err != nil {
+		return "", fmt.Errorf("passthrough batch control: %w", err)
+	}
+	switch {
+	case resp.Error == nil:
+		return "", fmt.Errorf("passthrough batch control: upstream answered a batch with a result; " +
+			"the control can no longer tell relaying from deciding")
+	case resp.Error.Code == -32001:
+		return "", fmt.Errorf("passthrough batch control: warden DENIED a batch in -passthrough-only " +
+			"(-32001). §3.1 makes M1 non-enforcing, and the latency baseline is only a " +
+			"relay measurement if this stays a relay")
+	case resp.Error.Code != -32600:
+		return "", fmt.Errorf("passthrough batch control: unexpected wire code %d", resp.Error.Code)
+	}
+	return "forwarded, upstream answered -32600", nil
 }

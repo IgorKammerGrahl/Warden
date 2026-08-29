@@ -23,7 +23,7 @@ var stageFloors = map[string]bool{
 // report writes the machine-readable artifacts and the summary table, and
 // prints the summary to stdout. It reports; it does not pass or fail. A number
 // that comes out badly is the measurement working.
-func report(dir string, cases []Case, results []Result, samples []LatencySample) error {
+func report(dir string, cases []Case, results []Result, samples []LatencySample, control string) error {
 	if err := writeResultsCSV(filepath.Join(dir, "results.csv"), results); err != nil {
 		return err
 	}
@@ -35,7 +35,7 @@ func report(dir string, cases []Case, results []Result, samples []LatencySample)
 	}); err != nil {
 		return err
 	}
-	s := summary(cases, results, samples)
+	s := summary(cases, results, samples, control)
 	if err := os.WriteFile(filepath.Join(dir, "summary.md"), []byte(s), 0o644); err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func (r rate) String() string {
 	return fmt.Sprintf("%5.1f%%  (%d/%d)", 100*float64(r.hit)/float64(r.n), r.hit, r.n)
 }
 
-func summary(cases []Case, results []Result, samples []LatencySample) string {
+func summary(cases []Case, results []Result, samples []LatencySample, control string) string {
 	var b strings.Builder
 	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
 
@@ -153,6 +153,15 @@ func summary(cases []Case, results []Result, samples []LatencySample) string {
 	p("attacks nobody wrote. The corpus was written by the same author as the code,")
 	p("which is the strongest reason to read it with suspicion, and the expected")
 	p("non-blocks below are where the honest limits of the design are recorded.")
+	p("")
+	p("That is not a hypothetical caveat. The T1 framing cases were added after a")
+	p("real client found the class they cover — a bypass that sat under a 100%%")
+	p("block rate because no case in the corpus could express the message shape.")
+	p("See eval/METHOD.md and docs/SHAKEDOWN.md.")
+	p("")
+	p("§3.1 control — a batch in `-passthrough-only`: %s.", control)
+	p("Passthrough must relay what enforcing refuses, or the latency baseline is")
+	p("measuring a second enforcing configuration.")
 	p("")
 	if miss := filter(advBlock, func(r Result) bool { return r.Decision != "deny" }); len(miss) > 0 {
 		p("Not blocked, and not documented as a non-block — every one of these is a finding:")

@@ -87,7 +87,12 @@ func run() error {
 	}
 	samples = append(append(samples, pb...), bare...)
 
-	return report(dir, cases, results, samples)
+	control, err := checkPassthroughForwardsBatch(bin, dir)
+	if err != nil {
+		return err
+	}
+
+	return report(dir, cases, results, samples, control)
 }
 
 // latencyCases are permitted invocations at chain depths 1, 3 and 5, presented

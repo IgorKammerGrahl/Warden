@@ -256,6 +256,20 @@ every attack someone thought to write down was stopped. It cannot say anything
 about attacks nobody wrote, and the strongest reason to distrust it is that the
 person who wrote the checks wrote the tests for them.
 
+That caveat has a documented instance, and it is the reason to keep reading it
+literally. A `tools/call` wrapped in a JSON-RPC batch array reached the upstream
+with no authorization at all — enforcement was not weak on that path, it was
+absent — and 54 adversarial cases at a 100% block rate did not see it, because
+every case in the corpus was constructed as a `tools/call` and the defect was in
+a message shape a `tools/call` cannot express. It was found by pointing a real
+MCP client at wardend (`docs/SHAKEDOWN.md`), not by this harness. The T1 framing
+cases and `Case.Raw` exist so the corpus can now reach that class; run against
+the pre-fix proxy they do not merely fail, they produce 5 fewer audit records
+than calls presented, and the join aborts the run. The lesson to carry is not
+that the corpus was short five cases — it is that a corpus derived from the same
+mental model as the code inherits that model's blind spots, and only a peer
+nobody here wrote can price them.
+
 **T4 has no denial cases at all** — its only case is the documented non-block.
 The `n/a` in that row of the summary is honest and should stay `n/a` until
 budget counters exist.

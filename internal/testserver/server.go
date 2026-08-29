@@ -34,12 +34,31 @@ type request struct {
 func Serve(in io.Reader, out io.Writer) error {
 	dec := json.NewDecoder(in)
 	for {
-		var req request
-		if err := dec.Decode(&req); err != nil {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
+		}
+		// A message this server cannot read — a JSON-RPC batch array, or an
+		// object whose members are the wrong types — is answered Invalid
+		// Request rather than ending the stream. It exists for the proxy
+		// tests: if warden ever forwards a shape it should have refused, the
+		// harness needs a distinguishable wire code to see it by, and a dead
+		// upstream would instead cascade into every later case failing. MCP
+		// removed batching in 2025-06-18, so refusing one is also correct.
+		var req request
+		if err := json.Unmarshal(raw, &req); err != nil {
+			b, mErr := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": nil,
+				"error": map[string]any{"code": -32600, "message": "invalid request: " + err.Error()}})
+			if mErr != nil {
+				return mErr
+			}
+			if _, err := out.Write(append(b, '\n')); err != nil {
+				return err
+			}
+			continue
 		}
 		// No id means a notification: MCP's initialized handshake step lands
 		// here and must produce no response at all.
