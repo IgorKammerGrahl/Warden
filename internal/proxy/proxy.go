@@ -164,20 +164,6 @@ func (p *Proxy) clientToServer(cr *stampReader) error {
 		}
 		t0 := cr.firstByte()
 
-		// A batch is refused before anything else looks at it. inspect reads
-		// a single JSON-RPC object, so an array parsed as neither a tools/call
-		// nor an error and fell through to the forward below unexamined: a
-		// tools/call wrapped in a one-element array reached upstream without
-		// being authorized. Refusing the array is the fail-closed reading of
-		// §3.2, and the only one available — authorizing the elements
-		// individually would mean re-serializing them, which the note below
-		// forbids for signature reasons, and a batch reply is one array that
-		// this relay's per-id pending map cannot pair back to its elements.
-		if p.Enforce != nil && isBatch(raw) {
-			p.denyBatch(t0)
-			continue
-		}
-
 		// Inspect a copy; forward the original bytes. Never the other way
 		// round: re-serializing a decoded message reorders object members
 		// and can reformat numbers, and in a project that carries a JCS
@@ -185,7 +171,17 @@ func (p *Proxy) clientToServer(cr *stampReader) error {
 		// signature, forwarding the exact received bytes is a correctness
 		// requirement, not a performance shortcut. Do not "clean this up"
 		// into a decode/encode round trip.
-		c := p.inspect(raw, t0)
+		// THE RULE: in enforcing mode a message the proxy cannot fully
+		// classify is denied, never forwarded. Absence of a positive
+		// authorization is a denial, not a pass. inspect returns known=false
+		// for bytes it cannot place, and that is the whole of the check —
+		// there is deliberately no list of bad shapes to keep up to date,
+		// because the batch bypass was exactly a shape nobody listed.
+		c, known := p.inspect(raw, t0)
+		if !known && p.Enforce != nil {
+			p.denyUnclassified(raw, t0)
+			continue
+		}
 		if c != nil && c.key == "" && p.PassthroughOnly {
 			// A tools/call with no id has no response to pair with, so
 			// passthrough has nothing to time and does not record it.
@@ -490,8 +486,9 @@ func (f *framer) write(w io.Writer, raw []byte) error {
 }
 
 // isBatch reports whether a client message is a JSON-RPC batch: a top-level
-// array. The decoder hands back the value's own bytes, but leading whitespace
-// is skipped here anyway rather than relying on that.
+// array. It selects a denial message, not a decision — denyUnclassified
+// refuses the bytes either way. The decoder hands back the value's own bytes,
+// but leading whitespace is skipped here anyway rather than relying on that.
 func isBatch(raw []byte) bool {
 	for _, b := range raw {
 		switch b {
@@ -506,58 +503,117 @@ func isBatch(raw []byte) bool {
 	return false
 }
 
-// denyBatch refuses a batch and records it. The error carries a null id
-// because JSON-RPC 2.0 §6 answers a rejected batch with one error object, and
-// the array was never opened, so there is no element id to answer with. The
-// audit record names no tool for the same reason: warden refused the frame,
-// not a call, and guessing at what the array held would be a claim it did not
-// verify. Passthrough is unchanged — it forwards a batch as it forwards
-// everything else, because §3.1 makes M1 the one mode that does not shape
-// traffic, and nothing is being enforced there to bypass.
-func (p *Proxy) denyBatch(t0 time.Time) {
+// denyUnclassified refuses a message inspect could not place, and records it.
+//
+// The error carries a null id because the id is one of the things that could
+// not be read: the message may be an array, or an object whose members are not
+// the shapes JSON-RPC gives them. JSON-RPC 2.0 §6 answers a rejected batch with
+// one error object on a null id, and the same answer is the honest one for any
+// message whose id warden will not claim to have parsed.
+//
+// The audit record names no tool for the same reason. Warden refused the frame
+// without learning what the message held, and recording a guess would be a
+// claim it did not verify.
+//
+// Passthrough is unchanged: §3.1 makes M1 the one mode that does not shape
+// traffic, and there is no enforcement in it to bypass.
+func (p *Proxy) denyUnclassified(raw []byte, t0 time.Time) {
 	p.mu.Lock()
 	p.seq++
 	corr := "c" + strconv.FormatUint(p.seq, 10)
 	p.mu.Unlock()
 
+	// A batch is called by name because it is the one unclassifiable shape a
+	// well-behaved client sends on purpose, and "warden does not open batches"
+	// is a different thing for an operator to read than "warden could not
+	// parse this".
+	detail := "unclassifiable client message refused: warden could not read it as a " +
+		"JSON-RPC message it is able to decide about, and §3.2 denies what it cannot classify"
+	if isBatch(raw) {
+		detail = "JSON-RPC batch refused: warden authorizes one tools/call at a time " +
+			"and does not open a batch array"
+	}
 	const ref = "ARCHITECTURE §3.2"
 	c := &call{corr: corr, t0: t0, dec: &decision{
 		stage: "frame", ref: ref,
-		trace: []audit.Step{{
-			Stage: "frame", Ref: ref, Outcome: "deny",
-			Detail: "JSON-RPC batch refused: warden authorizes one tools/call at a time and does not open a batch array",
-		}},
+		trace: []audit.Step{{Stage: "frame", Ref: ref, Outcome: "deny", Detail: detail}},
 	}}
 	if err := p.writeClient(rpcError(json.RawMessage("null"), ErrCodeDenied,
 		"warden: request denied by the authorization policy",
 		map[string]string{"stage": c.dec.stage, "ref": c.dec.ref})); err != nil {
-		p.logf("failed to deliver the batch denial to the client: %v", err)
+		p.logf("failed to deliver the frame denial to the client: %v", err)
 	}
 	p.emitNoResponse(c)
 }
 
-// inspect extracts what M1 records from a client message, and returns nil for
-// anything that is not a tools/call request. It never rejects: an absent or
-// malformed _meta is recorded and forwarded, because fail-closed is M2 (§3.1
-// says so explicitly, naming M1 as the sole exception).
-func (p *Proxy) inspect(raw []byte, t0 time.Time) *call {
-	var msg struct {
-		ID     json.RawMessage `json:"id"`
+// inspect classifies a client message and, for a tools/call, extracts what M1
+// records. The second return is whether the message was classified at all.
+//
+// Three outcomes, and the third is the one that matters:
+//
+//	(c, true)     a tools/call — decide about it
+//	(nil, true)   classified, and it is not a tools/call — relay it
+//	(nil, false)  valid JSON that warden cannot place — the caller denies it
+//	              in enforcing mode
+//
+// It never rejects on its own: an absent or malformed _meta is recorded and
+// forwarded here, because fail-closed is M2 (§3.1 says so explicitly, naming
+// M1 as the sole exception).
+//
+// This used to be one Unmarshal into one struct, with any error returning nil
+// and nil meaning "relay it". That conflated the second outcome with the third
+// and was a full enforcement bypass: a top-level array, a params that is not
+// an object, a name that is not a string — all failed the Unmarshal, all
+// returned nil, all were forwarded to the upstream having never been
+// authorized. Real clients found it. Keep the stages separate.
+func (p *Proxy) inspect(raw []byte, t0 time.Time) (*call, bool) {
+	// Stage 1, the envelope. Only what is needed to classify is typed;
+	// everything else stays raw, so a legal-but-unusual id or params cannot
+	// make the classification itself fail. Nothing that is a valid JSON-RPC
+	// message fails here — an array or a scalar does, and neither is one.
+	var env struct {
 		Method string          `json:"method"`
-		Params struct {
-			Name      string                     `json:"name"`
-			Arguments json.RawMessage            `json:"arguments"`
-			Meta      map[string]json.RawMessage `json:"_meta"`
-		} `json:"params"`
+		Params json.RawMessage `json:"params"`
+		ID     json.RawMessage `json:"id"`
 	}
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		// Well-formed JSON that is not a JSON-RPC message we recognize.
-		// Forward it; shaping the client's traffic is not M1's job.
-		return nil
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, false
 	}
-	if msg.Method != "tools/call" {
-		return nil
+	if env.Method != "tools/call" {
+		// Includes a response to a server-initiated request, which carries no
+		// method at all. Real servers send those; see responseKey.
+		return nil, true
 	}
+
+	// Stage 2, the params of something that has named itself a tools/call.
+	// A failure here is not "some other message" — the client said what this
+	// is — it is a tools/call whose shape warden cannot read, and forwarding
+	// it would authorize nothing. _meta stays raw: a malformed one is a
+	// decision for bind to make, not a classification failure.
+	var params struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+		Meta      json.RawMessage `json:"_meta"`
+	}
+	if len(env.Params) > 0 {
+		if err := json.Unmarshal(env.Params, &params); err != nil {
+			return nil, false
+		}
+	}
+
+	// Stage 3, the §3.1 keys. A _meta that is not an object — an array, a
+	// string, a number — leaves the map nil, which is the same state as no
+	// _meta at all and reaches the same denial at bind. That is what
+	// ARCHITECTURE §3.1 asks for: it lists "an empty array" beside "_meta
+	// absent entirely" as a fail-closed case, and the citation an operator
+	// should see for it is §3.1, not a frame-stage "could not parse".
+	var meta map[string]json.RawMessage
+	if len(params.Meta) > 0 {
+		if err := json.Unmarshal(params.Meta, &meta); err != nil {
+			meta = nil
+		}
+	}
+
 	// A missing id is kept, not skipped. It means the client sent the call as
 	// a notification, and in enforcing mode dropping it from consideration
 	// would be a bypass: the tool still runs upstream, and the client simply
@@ -569,17 +625,17 @@ func (p *Proxy) inspect(raw []byte, t0 time.Time) *call {
 	p.mu.Unlock()
 
 	return &call{
-		key:  string(msg.ID),
+		key:  string(env.ID),
 		corr: corr,
-		tool: msg.Params.Name,
-		args: msg.Params.Arguments,
+		tool: params.Name,
+		args: params.Arguments,
 		// Enforcing, bind reads the same keys with meaning attached, so
 		// readMeta here would be the second parse of the same chain for an
 		// answer the first one already produces.
-		meta:    p.observeMeta(msg.Params.Meta),
-		rawMeta: msg.Params.Meta,
+		meta:    p.observeMeta(meta),
+		rawMeta: meta,
 		t0:      t0,
-	}
+	}, true
 }
 
 // metaInfo is what the §3.1 keys held. Presence and size, never meaning: M1

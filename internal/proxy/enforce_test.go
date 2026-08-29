@@ -658,6 +658,90 @@ func TestPassthroughStillIgnoresNotifications(t *testing.T) {
 	}
 }
 
+// TestEnforcingRefusesUnclassified is the general form of the batch bypass.
+// The defect was never really about batches: inspect decoded into one struct,
+// any failure returned nil, and nil meant "relay it", so every shape that
+// failed that Unmarshal reached the upstream unauthorized. A batch was one.
+// These are the others, and each is an ordinary tools/call with one member of
+// the wrong JSON type — nothing a client has to work at.
+//
+// Two outcomes are correct here, and which one is correct is the point. A
+// message warden cannot classify at all is refused at the frame with a null
+// id, because its id is one of the things it could not read. A message it can
+// classify as a tools/call whose _meta is merely the wrong shape reaches bind
+// and is denied there on its own id, citing §3.1 — which is what ARCHITECTURE
+// §3.1 asks for when it lists "an empty array" beside "_meta absent entirely".
+func TestEnforcingRefusesUnclassified(t *testing.T) {
+	for _, tc := range []struct {
+		name, params string
+		wantStage    string
+		wantID       string
+	}{
+		{"params is a string", `"notanobject"`, "frame", "null"},
+		{"params is an array", `[1,2]`, "frame", "null"},
+		{"name is not a string", `{"name":123,"arguments":{}}`, "frame", "null"},
+		{"top-level scalar", "", "frame", "null"},
+		{"_meta is an array", `{"name":"read","arguments":{},"_meta":[]}`, "bind", "1"},
+		{"_meta is a string", `{"name":"read","arguments":{},"_meta":"x"}`, "bind", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := aattest.New(t, 3)
+			r := newRigWith(t, enforcer(f))
+
+			msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":` + tc.params + "}"
+			if tc.params == "" {
+				msg = `"a bare string is valid JSON and is not a JSON-RPC message"`
+			}
+			r.send(t, msg+"\n")
+			// A permitted call after it, so "nothing was forwarded" is proved
+			// by the next message arriving rather than by a timeout.
+			r.send(t, toolCall(t, `2`, aattest.Read, aattest.Allowed,
+				f.Meta(t, aattest.Read, aattest.Allowed)))
+
+			var fwd struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if err := json.Unmarshal([]byte(r.forwarded(t)), &fwd); err != nil {
+				t.Fatalf("forwarded message is not JSON: %v", err)
+			}
+			if string(fwd.ID) != "2" {
+				t.Fatalf("the upstream received id %s; the unclassified message was forwarded", fwd.ID)
+			}
+			r.reply(t, `{"jsonrpc":"2.0","id":2,"result":{"content":[]}}`+"\n")
+			if err := r.shutdown(t); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			var resp struct {
+				ID    json.RawMessage `json:"id"`
+				Error *struct {
+					Code int               `json:"code"`
+					Data map[string]string `json:"data"`
+				} `json:"error"`
+			}
+			lines := splitLines(r.clientOut.String())
+			if len(lines) != 2 {
+				t.Fatalf("client received %d messages, want the denial and the reply: %q", len(lines), lines)
+			}
+			if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+				t.Fatalf("the denial is not valid JSON-RPC: %v (%s)", err, lines[0])
+			}
+			if resp.Error == nil || resp.Error.Code != ErrCodeDenied {
+				t.Fatalf("client received %s, want a -32001 denial", lines[0])
+			}
+			if string(resp.ID) != tc.wantID {
+				t.Errorf("denial carries id %s, want %s", resp.ID, tc.wantID)
+			}
+			if resp.Error.Data["stage"] != tc.wantStage {
+				t.Errorf("denial fired at stage %q, want %q", resp.Error.Data["stage"], tc.wantStage)
+			}
+			if recs := r.records(t); len(recs) != 2 || recs[0].Decision != audit.DecisionDeny {
+				t.Errorf("audit does not hold the denial: %+v", recs)
+			}
+		})
+	}
+}
+
 // TestEnforcingRefusesBatch closes a bypass a real client found. inspect
 // reads one JSON-RPC object; a top-level array parsed as neither a tools/call
 // nor an error, so before the frame check a call wrapped in a one-element
