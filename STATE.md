@@ -10,7 +10,10 @@ to pick up the next milestone without re-exploring the repo.
 
 **M0a, M0b1, M0b2, M1, M2, M3, M4, M4b and M5 are complete.** Phase 1 of
 ROADMAP is done, and it has since been run against a peer it did not write —
-see `docs/SHAKEDOWN.md` and the section below.
+see `docs/SHAKEDOWN.md` and the section below. Its §4.5 reading has since been
+diffed against a second constraint engine (`interop/`, and the section on what
+that covers); its §6/§7 reading has not, because no second implementation of
+the draft-01 token format exists.
 
 M0a was encoding and crypto only: a token's own claims, its own signature, its
 own shape. M0b1 added `internal/core` — the nine §3.4 constraint types with
@@ -129,6 +132,82 @@ workload adds is the cost of staying core-only: enumerating the tree as
 enforcement overhead came from. Deployment-guide material, not NOTES material.
 Same for the missing element-wise combinator and object-argument vocabulary.
 
+## Interop: what it covers, and what it does not (2026-08-29)
+
+`interop/` diffs warden's §4.5 subsumption verdicts against
+`github.com/tenuo-ai/tenuo`, pinned at rev `4d6f26e8` and pulled by cargo, so
+`go run ./interop` works from a clean checkout with cargo on PATH. It writes
+`interop/results/verdicts.md`.
+
+**It started as something else, and the reason matters.** The plan was a
+token-layer interop: mint a chain in one implementation, verify it in the other,
+in both directions. tenuo does not implement draft-01's token format at all —
+CBOR warrants over Ed25519, no JWS, no JCS, no RFC 7638, and none of the
+draft's claim names anywhere in the Rust. Appendix E's "reference
+implementation" and the project page's "canonical reference implementation" are
+not conformance statements, and tenuo's own `docs/thesis.md` says so. NOTES 13
+and 14 record this. The consequence for us is blunt and stands until a second
+implementation of the wire format exists: **warden's conformance to §6 and §7
+is a claim about warden's reading, tested against itself.** `Derive` goes
+through `core.CheckLink`, so no chain we mint can fail the invariants we wrote.
+
+**What the comparison does cover.** §3.4's constraint semantics and §4.5's
+attenuation rules, judged by an engine written without reference to the
+section. 48 pairs, weighted toward readings that require interpretation rather
+than swept uniformly — wildcard agreeing is weak evidence because §4.5 states
+that rule most explicitly, so it sits in `control` where it cannot carry the
+headline. Results by category, agreements and disagreements kept apart:
+
+| category | cases | agree | disagree |
+|---|---:|---:|---:|
+| direction-probe | 4 | 4 | 0 |
+| no-witness-cross-type | 9 | 9 | 0 |
+| range-inclusivity | 9 | 9 | 0 |
+| all-matching | 6 | 4 | **2** |
+| not_one_of-vs-one_of | 4 | 4 | 0 |
+| control | 16 | 16 | 0 |
+
+**The disagreement is the `all` matcher, both rows.** §4.5 requires each parent
+clause to be matched to a *distinct* derived clause; tenuo's
+`All::validate_attenuation` is the same rule with the `used` set removed, so a
+single derived clause can satisfy several parent clauses. warden denies, tenuo
+permits. tenuo's rule is sound — the containment argument in NOTES 12 does not
+need injectivity — and strictly more complete, which makes §4.5's MUST NOT
+stricter than soundness requires with no stated rationale, unchanged since
+draft-00. This is the one finding worth the author's time, and NOTES 12 frames
+it carefully: tenuo's Rust cites no draft section, so this is not two
+independent readers disagreeing; it is the draft's own repository not
+implementing the section's most explicit MUST NOT.
+
+**The 30.5% class came back agreeing.** M0b1's completeness probe found that
+30.5% of default-deny rejections had no witness — pairs warden denies by
+absence from §4.5's table rather than by any declared rule (NOTES 5). Nine of
+them, each a real attenuation by §3.4's plain meaning, went to tenuo. It denies
+every one, by the same mechanism: an explicit match arm per permitted pair and
+a catch-all `Err(IncompatibleConstraintTypes)`. On the nine draft types the two
+tables are the same 19 permitted pairs of 81. The strongest available finding
+was that tenuo would permit some of these; it does not, which is a real result
+in the other direction — the default-deny reading is not warden's alone.
+
+**Two things guard the comparison itself.** The APIs are mirrored:
+`core.Subsumes(derived, parent) bool` against
+`parent.validate_attenuation(&derived) -> Result<()>` — opposite argument order
+*and* opposite sense, so an inverted mapping would leave the symmetric rules
+agreeing and look like partial success. `interop/main.go`'s header states the
+mapping, and the `direction-probe` category asserts it with four pairs whose
+verdict flips under swap; the run aborts before reporting anything if a probe
+comes back wrong on either side. Separately, every JSON number crosses to
+tenuo's `ConstraintValue::Float` unconditionally, because tenuo compares
+`Integer(1) != Float(1.0)` where JCS does not — flattening it keeps a value-model
+difference from masquerading as a §4.5 disagreement.
+
+**What it still does not cover.** JCS canonical bytes and float formatting,
+UTF-16 code-unit ordering in string escapes, RFC 7638 thumbprints, `par_hash`
+over the JWS Signing Input, the §5.2 PoP JWT, §7 step ordering — every layer
+where a divergence surfaces as an authentication failure rather than a policy
+disagreement, which is exactly the class that is hard to attribute. A shared
+reading of the subsumption rules is not a shared wire format.
+
 ## The fail-closed classification rule (2026-08-29)
 
 **In enforcing mode, a message the proxy cannot fully classify is denied, never
@@ -245,6 +324,7 @@ internal/proxy/                              the relay (framing, correlation) an
 internal/testserver/                         ~100-line stdio MCP server, the e2e's upstream peer
 cmd/wardend/                                 the daemon: flags, subprocess, wiring, latency report
 eval/                                        M4: adversarial + benign corpora, harness, results (METHOD.md)
+interop/                                     §4.5 verdict comparison against tenuo (corpus, Rust shim, results)
 demo/                                        M5: two agents, the real proxy, a narrated transcript
 README.md                                    the front door: what warden is, `go run ./demo`, the numbers
 ```

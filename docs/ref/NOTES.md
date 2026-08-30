@@ -528,3 +528,152 @@ constraint map entry, defaulting to true: absence then denies exactly as it
 does today unless the issuer has said otherwise, and the closed world still
 rejects arguments the map never named, which is the half that carries the
 value.
+
+## 12. §4.5's one-to-one clause assignment for `all` is stricter than soundness needs, and the draft's own repository does not implement it
+
+**What the draft says.** §4.5, in the `all` row (draft-01 lines 1606-1613):
+
+> Clause matching for `all` is subsumption-based: for each clause C_p in the
+> parent array, the enforcement point MUST find at least one clause C_d in the
+> derived array such that C_d subsumes C_p per this section. **Each parent
+> clause MUST be matched to a distinct derived clause (one-to-one assignment);
+> a single derived clause MUST NOT be used to satisfy more than one parent
+> clause.** If any parent clause cannot be matched, the check MUST fail.
+> Unmatched additional clauses in the derived array are permitted.
+
+The pseudocode that follows carries a `used` set and backtracks. The prose
+around it explains why *backtracking* is needed — a greedy match can dead-end —
+but never says why *distinctness* is required. The requirement is unchanged
+from draft-00; only the same-`constraint_type` restriction on candidate clauses
+was dropped between 00 and 01.
+
+**What it leaves open.** Nothing about the rule's meaning; it is one of the
+most explicit sentences in §4.5. What is open is the rule's purpose, because
+distinctness is not needed for soundness and the draft does not claim it is.
+
+An `all` accepts a value iff every clause accepts it. Let `m` map each parent
+clause `P_i` to a derived clause `D_m(i)` that subsumes it, injective or not.
+For any `v` the derived `all` accepts, every `D_j` accepts `v`, so
+`D_m(i)` accepts `v`, so `P_i` accepts `v` — for every `i`. Therefore the
+parent `all` accepts `v`. The derived set is contained in the parent set
+whether or not `m` is injective. Distinctness rejects derivations that are
+genuine attenuations by §3.4's own semantics; it never admits one that is not.
+
+**What the comparison found.** `interop/` runs the same (parent, derived) pairs
+through warden's `core.Subsumes` and through tenuo's
+`Constraint::validate_attenuation`. Forty-eight pairs, weighted toward the
+rules that require interpretation. Two disagree, and both are this rule:
+
+| pair | warden | tenuo |
+|---|---|---|
+| parent `all[range[0,100], range[0,50]]`, derived `all[range[0,10]]` | deny | permit |
+| parent `all[wildcard, wildcard]`, derived `all[exact 5]` | deny | permit |
+
+tenuo's `All::validate_attenuation` is `for parent_c { child.constraints.iter()
+.any(|c| parent_c.validate_attenuation(c).is_ok()) }` — the draft's rule with
+the `used` set removed. Sound, per the argument above, and strictly more
+complete.
+
+This is weaker evidence than "two independent readers of §4.5 disagreed", and
+should not be reported as that. tenuo's Rust cites no draft section and
+implements a different token format entirely; its constraint vocabulary lines
+up with §3.4 because both come from the same author, not because anyone
+implemented the section twice. What it *is* evidence of is narrower and, for a
+spec review, more useful: the draft's own repository carries `ietf/draft-01`
+and a constraint engine that does not enforce the section's most explicit MUST
+NOT, and has not since draft-00.
+
+**What warden does.** Enforces distinctness, as written. `allSubsumes` runs
+Kuhn's augmenting-path algorithm rather than the draft's backtracking, which
+§4.5 permits explicitly ("Implementations MAY employ Hopcroft-Karp or similar
+maximum matching algorithms"); maximum matching finds an assignment exactly
+when one exists, so the two agree on every input. The `all-greedy-dead-end`
+case in `interop/corpus.go` covers the input where a greedy scan strands a
+parent clause and only search finds the matching — both implementations permit
+it, but tenuo permits it without needing a matching at all, so that row is
+agreement for unrelated reasons and is annotated as such in the report.
+
+**Worth raising.** Yes, and it is the one finding from this pass that is worth
+the author's time. Two questions, in order. First, is the distinctness MUST NOT
+intentional? If it is, the draft should say what it buys, because it is not
+soundness and a reader who works out the containment argument will otherwise
+assume the sentence is an error. If it is not, striking it simplifies the rule
+to a per-clause existence check and removes the need for backtracking, matching
+maximum, or the pseudocode's `used` set entirely. Second, either way, the
+constraint engine in the same repository disagrees with the text, and one of
+the two should move.
+
+---
+
+# Notes on the evidence base
+
+Not spec items. These record what warden's conformance claims currently rest
+on, so a later reader does not overestimate them. Kept here because the
+question they answer — *how do we know our reading of the draft is right?* — is
+the same question the entries above are asking one section at a time.
+
+## 13. No independent implementation of the draft-01 token format exists, so the independent-conformance claim is unbacked at that layer
+
+**What we assumed.** That `github.com/tenuo-ai/tenuo`, described in Appendix E
+of the draft as a reference implementation, implements draft-01's token format,
+and that feeding it a warden-minted chain would test warden's reading of §6 and
+§7 against a second reader.
+
+**What is actually there.** It does not implement the format. tenuo issues CBOR
+(RFC 8949) warrants in a `SignedWarrant` envelope over Ed25519 with a
+domain-separated signing context, with a time-bucketed proof of possession of
+its own design. There is no JWS, no JOSE dependency, no RFC 8785 JCS
+canonicalization, and no RFC 7638 thumbprint. `authorization_details`,
+`attenuating_agent_token`, `par_hash`, `del_depth`, and `cnf` do not appear
+anywhere in the Rust outside the checked-in copies of the draft itself. There
+is nothing to hand a chain to. Its own `docs/thesis.md` says as much:
+"Tenuo's implementation aligns with these principles, but it is not presented
+as full conformance to the draft while the specification is still evolving."
+
+**What this costs.** Every existing test in this project verifies warden
+against warden's own reading of the draft, and the structure guarantees it:
+`Derive` goes through `core.CheckLink`, so no chain warden mints can fail the
+invariants warden wrote. `eval/METHOD.md` already records the false-positive
+consequence — a corpus written by the author of the code under test. The
+missing piece was an outside reader, and at the token layer there is not one to
+be had. Until a second implementation of the wire format exists, warden's
+conformance to §6 and §7 is a claim about warden's reading, tested thoroughly
+against itself.
+
+**What the §4.5 comparison does substitute for, and what it does not.** The
+`interop/` harness runs (parent, derived) constraint pairs through
+`core.Subsumes` and through tenuo's `Constraint::validate_attenuation` and
+diffs the verdicts. That is a real second opinion on the *semantics* of §3.4's
+constraint vocabulary and §4.5's attenuation rules, from an engine written
+without reference to the section — see entry 12 for what it found and for the
+limits on how independent "independent" is here, given the shared author.
+
+It substitutes for nothing else. A shared reading of the subsumption rules is
+not a shared wire format. It says nothing about JCS canonical bytes, float
+formatting, UTF-16 code-unit ordering in string escapes, RFC 7638 thumbprint
+computation, `par_hash` over the JWS Signing Input, the §5.2 PoP JWT, or the §7
+step ordering — which is where the divergences most likely to break a real
+deployment would live, because they fail as an authentication error rather than
+as a policy disagreement and are correspondingly hard to attribute. The
+comparison is also confined to types both engines have; the value model was
+deliberately flattened (every JSON number crosses as a float) so that tenuo's
+`Integer`/`Float` split could not masquerade as a §4.5 disagreement.
+
+**Worth raising.** No. This is our record, not a spec question.
+
+## 14. tenuo's own documentation disagrees about whether it is a reference implementation — internal record only
+
+**Do not raise this with the author.** The spec review in flight is a spec
+review and should stay one. This entry exists so that a later reader of entry
+13 does not re-derive the contradiction, conclude it is news, and mention it.
+
+`docs/index.html` describes the draft and adds: "Tenuo is the canonical
+reference implementation." `docs/thesis.md`, in the same repository, says the
+implementation "is not presented as full conformance to the draft while the
+specification is still evolving." Both are current at rev
+`4d6f26e8607fb4c2596300ed746bd8ac4afca2d9`.
+
+The second is the accurate one, and entry 13 records why. The first is a
+project page describing a body of work, not a conformance statement, and
+reading it as one is what sent this pass looking for a token-layer interop that
+does not exist. That was our inference to correct, and we have corrected it.

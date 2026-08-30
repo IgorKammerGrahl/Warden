@@ -1,0 +1,14 @@
+[package]
+name = "tenuo-subsumption-shim"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Pinned to the exact revision the mapping in src/main.rs was read against.
+# tenuo's crate lives in the tenuo-core/ subdirectory; cargo finds it by package
+# name. Bumping this rev without re-reading Constraint::validate_attenuation is
+# how a silent mapping drift gets in.
+[dependencies]
+tenuo = { git = "https://github.com/tenuo-ai/tenuo", rev = "4d6f26e8607fb4c2596300ed746bd8ac4afca2d9" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

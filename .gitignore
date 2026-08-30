@@ -35,3 +35,6 @@ wardend-audit.jsonl
 # M4 eval: rebuilt binary and raw run logs (regenerate with `go run ./eval`)
 eval/results/wardend
 eval/results/*.jsonl
+
+# interop shim: cargo build output (regenerate with `go run ./interop`)
+interop/shim/target/
