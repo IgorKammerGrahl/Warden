@@ -270,6 +270,18 @@ that the corpus was short five cases — it is that a corpus derived from the sa
 mental model as the code inherits that model's blind spots, and only a peer
 nobody here wrote can price them.
 
+It happened a second time, which is the part worth taking seriously. With the
+T1 cases in place and the framing rule generalized, a second real server
+(`docs/SHAKEDOWN-2.md`) found the same class through a different door: not a
+message shape the corpus could not express, but a *method* it never sent.
+`resources/read` returned the whole dataset that the leaf capability was
+withholding from `read_graph`, unaudited, because "not a `tools/call`" was
+being read as "safe to relay". Every case in this corpus is still a
+`tools/call` or a framing failure of one; `frame-resources-read` and
+`frame-method-outside-the-vocabulary` are the two that are not. Two peers have
+now each produced one bypass on their first run, which is the honest prior for
+the third.
+
 **T4 has no denial cases at all** — its only case is the documented non-block.
 The `n/a` in that row of the summary is honest and should stay `n/a` until
 budget counters exist.

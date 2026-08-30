@@ -1,6 +1,6 @@
 # warden — STATE
 
-Updated: 2026-08-29 (post-shakedown hardening — the classification rule, 5 siblings, corpus T1)
+Updated: 2026-08-30 (shakedown 2 — the method allow-list, NOTES 15/16)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
@@ -9,8 +9,8 @@ to pick up the next milestone without re-exploring the repo.
 ## Current position
 
 **M0a, M0b1, M0b2, M1, M2, M3, M4, M4b and M5 are complete.** Phase 1 of
-ROADMAP is done, and it has since been run against a peer it did not write —
-see `docs/SHAKEDOWN.md` and the section below. Its §4.5 reading has since been
+ROADMAP is done, and it has since been run against two peers it did not write —
+see `docs/SHAKEDOWN.md`, `docs/SHAKEDOWN-2.md`, and the two sections below. Its §4.5 reading has since been
 diffed against a second constraint engine (`interop/`, and the section on what
 that covers); its §6/§7 reading has not, because no second implementation of
 the draft-01 token format exists.
@@ -208,6 +208,78 @@ where a divergence surfaces as an authentication failure rather than a policy
 disagreement, which is exactly the class that is hard to attribute. A shared
 reading of the subsumption rules is not a shared wire format.
 
+## Real-peer shakedown 2 (2026-08-30)
+
+`wardend` in front of `@modelcontextprotocol/server-memory` 2026.7.4, driven by
+two headless Claude Code sessions: 71 `tools/call` across all 9 tools. Server
+picked to be unlike the filesystem one — six of nine tools take an array of
+*objects* as their single argument, `read_graph` takes none at all, and the
+graph is stateful, so entity names created in call *n* are arguments to call
+*n+k*. Full write-up in `docs/SHAKEDOWN-2.md`; what a later session needs:
+
+**One bypass found and fixed, and it is the same class as shakedown 1's.**
+`inspect` returned `(nil, true)` — "classified, not a `tools/call`" — for every
+other method, and the caller read `true` as permission to relay. This server
+publishes its whole graph twice, through the `read_graph` tool and at
+`memory://knowledge-graph`. Under a capability that did not authorize
+`read_graph`, warden denied it 6× at §7 step 6b and forwarded one
+`resources/read` that returned the entire graph, with no decision and no audit
+record. Count check: 14 lines reached the upstream, 6 had records.
+
+The fix is `relayed` in `internal/proxy/proxy.go`: in enforcing mode
+`tools/call` is decided, an allow-listed method is relayed, and **everything
+else is refused at the frame**. The allow-list is `initialize`,
+`notifications/initialized`, `notifications/cancelled`, `ping`, `tools/list`,
+`resources/list`, `resources/templates/list`, `prompts/list`, plus responses to
+server-initiated requests (no `method`, has `result` or `error`). An allow-list
+and not a list of dangerous methods, for the same reason as the batch: the
+bypass was a method nobody had listed. **Adding an entry to that map is a
+security decision** — a method that returns data belongs in the AAT vocabulary
+first, and there is no AAT vocabulary for one. Unlike the frame denials, this
+one answers on the message's own id: warden read the method fine and is
+refusing, not failing to parse. Regression test
+`TestEnforcingRefusesUnauthorizableMethod`; corpus cases `frame-resources-read`
+and `frame-method-outside-the-vocabulary`.
+
+The consequence to state to any operator: warden is now unusable in front of a
+server whose primary interface is resources or prompts. That is correct and it
+is NOTES 15 — a gap in the draft, whose capability model has exactly one noun.
+
+**Parser agreement held.** warden classifies with `encoding/json`, the upstream
+parses with V8, and every duplicate JSON member is a place they could disagree
+— a disagreement is a full bypass, since the PoP is signed over what *warden*
+read. Six probes: duplicate `method` both orders, duplicate `params.name` both
+orders, duplicate `arguments`, and `"\u0074ools/call"`. Both parsers are
+last-wins on all of them, proven from the server's side: in the
+`read_graph`-then-`search_nodes` probe warden authorized `search_nodes` and the
+upstream returned the 690 B search result, not the 11805 B graph. Negative
+result about two specific parsers only; the probes stay for the next peer.
+
+**Phase 2 inverted shakedown 1's result.** There, 57 of 72 calls were denied
+and the policy was too tight. Here the honest operator attempt permits 68 of 71
+— because six of nine tools got `wildcard` on their only argument. The policy
+is not too tight, it is **vacuous**. `exact` cannot help: Table 2 restricts it
+to "value (any scalar)" and `decodeScalar` enforces that. The only expressive
+moves are `one_of` over whole argument values or `subset` over array elements,
+both permitted by Table 2 only by silence, and both cost 13× the chain
+(16.4 KB vs 1.2 KB) to permit exactly the same 71 calls. They are the
+recording, notarized. NOTES 16.
+
+**Denials: 3 false positives across five profiles**, all `delete_entities`
+@§3.4 `subset` on entity names the workload created *during the run* — the
+capability was minted from the graph at *t=0*, which is the only state an
+issuer can enumerate. Same class as shakedown 1's `one_of` over paths created
+during the run, and inherent to a stateful server. `readonly` was clean both
+ways: 44 write calls denied at §7 step 6b, 27 read calls permitted, zero false
+positives. The vocabulary works at tool granularity; it is argument granularity
+over objects where it has nothing to say.
+
+**Latency against a real peer**, overhead p50, n=71: passthrough 0.132 ms
+(upstream 1.964 ms); enforcing at depth 1 ranges 0.271 ms (1240 B chain) to
+1.965 ms (16556 B chain); at depth 2, 0.411 ms to 4.586 ms. Enforcement tracks
+chain *size*, not call count. At depth 2 with an object whitelist warden costs
+four times what the server costs.
+
 ## The fail-closed classification rule (2026-08-29)
 
 **In enforcing mode, a message the proxy cannot fully classify is denied, never
@@ -302,7 +374,8 @@ so a record claiming to know the tool fails the run.
 Run against the pre-fix proxy the corpus does not report a lower block rate; it
 **aborts** — `77 records for 82 presented calls`, the 5 new cases vanishing
 exactly as the original bug did. Post-fix: **59/59 blocked, 59/59 correctly
-attributed, 0/19 false positives.** `internal/testserver` now answers an
+attributed, 0/19 false positives** (61/61 after shakedown 2 added
+`frame-resources-read` and `frame-method-outside-the-vocabulary`). `internal/testserver` now answers an
 unreadable message with `-32600` instead of ending the stream, so a forwarded
 batch is a distinguishable wire code rather than a dead upstream cascading into
 every later case.
@@ -314,6 +387,7 @@ docs/SPEC.md, ARCHITECTURE.md, ROADMAP.md   Phase 1 design (rev. 3)
 docs/adr/0001-*.md                          invocation-granularity constraints
 docs/ref/draft-...-01.txt                   vendored AAT draft-01
 docs/ref/NOTES.md                           spec ambiguities found while implementing
+docs/SHAKEDOWN.md, SHAKEDOWN-2.md           the two real-peer shakedowns
 internal/aat/jcs/                            RFC 8785 JSON canonicalization
 internal/aat/jws/                            RFC 7515 compact serialization, Ed25519 only
 internal/aat/                                AAT claim set, JWK/thumbprints, PoP JWT, §7 verify, §6 derive
@@ -326,6 +400,7 @@ cmd/wardend/                                 the daemon: flags, subprocess, wiri
 eval/                                        M4: adversarial + benign corpora, harness, results (METHOD.md)
 interop/                                     §4.5 verdict comparison against tenuo (corpus, Rust shim, results)
 demo/                                        M5: two agents, the real proxy, a narrated transcript
+shakedown2/                                  shakedown 2 replay harness: capability profiles, phase-1-derived values
 README.md                                    the front door: what warden is, `go run ./demo`, the numbers
 ```
 

@@ -837,3 +837,112 @@ func TestPassthroughForwardsBatch(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 }
+
+// TestEnforcingRefusesUnauthorizableMethod closes the shakedown-2 bypass. It
+// is the same class as the batch: a shape warden could not authorize was
+// forwarded anyway, because inspect's "this is not a tools/call" was being
+// read as "this is safe to relay".
+//
+// A real server made it concrete. @modelcontextprotocol/server-memory
+// publishes its whole knowledge graph twice — through the read_graph tool and
+// at memory://knowledge-graph — so a capability that withholds read_graph
+// withholds nothing: six denials at §7 step 6b, then one resources/read
+// returned the graph with no decision and no audit record. §3.3 capabilities
+// describe tools, so there was never anything to check that method against.
+//
+// The handshake and the discovery lists still relay; everything else is
+// refused at the frame, on its own id, because warden read the method
+// perfectly well and is refusing it, not failing to parse it.
+func TestEnforcingRefusesUnauthorizableMethod(t *testing.T) {
+	for _, tc := range []struct {
+		name, msg string
+		wantRelay bool
+		wantID    string
+	}{
+		{"resources/read", `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"memory://knowledge-graph"}}`, false, `1`},
+		{"prompts/get", `{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"p"}}`, false, `1`},
+		{"resources/subscribe", `{"jsonrpc":"2.0","id":1,"method":"resources/subscribe","params":{"uri":"file:///x"}}`, false, `1`},
+		{"completion/complete", `{"jsonrpc":"2.0","id":1,"method":"completion/complete","params":{}}`, false, `1`},
+		{"a method nobody has invented yet", `{"jsonrpc":"2.0","id":1,"method":"memory/dump","params":{}}`, false, `1`},
+		{"no method and no result", `{"jsonrpc":"2.0","id":1,"params":{}}`, false, `null`},
+		{"tools/list", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, true, ``},
+		{"resources/list", `{"jsonrpc":"2.0","id":1,"method":"resources/list"}`, true, ``},
+		{"initialize", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`, true, ``},
+		{"initialized notification", `{"jsonrpc":"2.0","method":"notifications/initialized"}`, true, ``},
+		// A response to a server-initiated request carries no method. The
+		// filesystem server's roots/list produced these for real.
+		{"response to roots/list", `{"jsonrpc":"2.0","id":7,"result":{"roots":[]}}`, true, ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := aattest.New(t, 3)
+			r := newRigWith(t, enforcer(f))
+
+			r.send(t, tc.msg+"\n")
+			// Drained before the next send: the pipes are unbuffered, so a
+			// relayed message has to be read before the proxy can accept
+			// another one.
+			if tc.wantRelay {
+				if got := r.forwarded(t); got != tc.msg {
+					t.Fatalf("the upstream received %s, want the message relayed verbatim", got)
+				}
+			}
+			// A permitted call after it, so "nothing was forwarded" is proved
+			// by the next message arriving rather than by a timeout.
+			r.send(t, toolCall(t, `2`, aattest.Read, aattest.Allowed,
+				f.Meta(t, aattest.Read, aattest.Allowed)))
+
+			var fwd struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if err := json.Unmarshal([]byte(r.forwarded(t)), &fwd); err != nil {
+				t.Fatalf("forwarded message is not JSON: %v", err)
+			}
+			if string(fwd.ID) != "2" {
+				t.Fatalf("the upstream received id %s; the message was forwarded unauthorized", fwd.ID)
+			}
+			r.reply(t, `{"jsonrpc":"2.0","id":2,"result":{"content":[]}}`+"\n")
+			if err := r.shutdown(t); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			lines := splitLines(r.clientOut.String())
+			if tc.wantRelay {
+				if len(lines) != 1 {
+					t.Fatalf("client received %d messages, want only the reply: %q", len(lines), lines)
+				}
+				if recs := r.records(t); len(recs) != 1 {
+					t.Fatalf("audit holds %d records, want only the permitted call", len(recs))
+				}
+				return
+			}
+
+			var resp struct {
+				ID    json.RawMessage `json:"id"`
+				Error *struct {
+					Code int               `json:"code"`
+					Data map[string]string `json:"data"`
+				} `json:"error"`
+			}
+			if len(lines) != 2 {
+				t.Fatalf("client received %d messages, want the denial and the reply: %q", len(lines), lines)
+			}
+			if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+				t.Fatalf("the denial is not valid JSON-RPC: %v (%s)", err, lines[0])
+			}
+			if resp.Error == nil || resp.Error.Code != ErrCodeDenied {
+				t.Fatalf("client received %s, want a -32001 denial", lines[0])
+			}
+			if resp.Error.Data["stage"] != "frame" {
+				t.Errorf("denial fired at stage %q, want frame", resp.Error.Data["stage"])
+			}
+			// A method warden read is refused on its own id; a message whose
+			// method it could not read is answered on null.
+			if string(resp.ID) != tc.wantID {
+				t.Errorf("denial carries id %s, want %s", resp.ID, tc.wantID)
+			}
+			if recs := r.records(t); len(recs) != 2 || recs[0].Decision != audit.DecisionDeny {
+				t.Errorf("audit does not hold the denial: %+v", recs)
+			}
+		})
+	}
+}

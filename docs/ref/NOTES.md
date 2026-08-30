@@ -603,6 +603,134 @@ maximum, or the pseudocode's `used` set entirely. Second, either way, the
 constraint engine in the same repository disagrees with the text, and one of
 the two should move.
 
+## 15. The capability model has one noun, and a real protocol reaches the same data through several
+
+**Where.** §3.3 `authorization_details`, §7 step 6b, and §5.2's `aat_tool`.
+
+**What the text says.** An `attenuating_agent_token` entry carries a `tools`
+member "that maps tool names to argument constraint" maps, tool identifiers
+"are the keys of the tools map", `aat_tool` is "the tool identifier being
+invoked" and "MUST exactly match a key in the tools map", and §7 step 6b
+verifies "tool is present in leaf_aat.tools". Every clause that grants
+authority in draft-01 grants it over a tool. The draft never uses the word
+"resource" for anything but an OAuth resource server, and never says what an
+enforcement point should do with a request that is not a tool invocation.
+
+**What is open.** The draft is silent on the scope of enforcement, and the
+silence has a direction. An enforcement point sits on a transport, and a
+transport carries more than tool invocations. Two implementers can read §7 as
+"decide tool invocations, relay the rest" or as "decide tool invocations, deny
+the rest", both conformant, with opposite security properties — and the first
+reading is the natural one, because §7 is written as a procedure for a single
+invocation and says nothing about anything else.
+
+The consequence is not theoretical, and it is not about exotic messages. MCP —
+the protocol the draft's whole motivating section describes without naming —
+gives a server three ways to publish the same bytes: a tool, a resource, and a
+prompt. `@modelcontextprotocol/server-memory` uses two of them for one graph:
+the `read_graph` tool, and the resource `memory://knowledge-graph`. Against a
+leaf token that did not authorize `read_graph`, warden denied it six times at
+§7 step 6b and forwarded one `resources/read` that returned the entire graph,
+with no decision and no audit record. Every argument constraint in the chain
+was intact and irrelevant. A capability language whose only noun is "tool"
+cannot attenuate a server that does not put everything behind tools.
+
+Note what this is *not*. It is not the closed-world problem: nothing was
+underconstrained. It is not a framing failure: the message was ordinary,
+well-formed and correctly parsed. The token said exactly what it meant to say,
+and what it meant to say could not reach the door the data came through.
+
+**What warden does.** Denies, and the allow-list is the point. In enforcing
+mode `tools/call` is decided and every other method is refused at the frame
+citing ARCHITECTURE §3.2, except a fixed set that carries no server-held
+content: `initialize`, `notifications/initialized`, `notifications/cancelled`,
+`ping`, `tools/list`, `resources/list`, `resources/templates/list`,
+`prompts/list`, and responses to server-initiated requests. It is an allow-list
+rather than a list of dangerous methods for the same reason the framing rule is
+— the bypass was a method nobody had listed — and the refusal is answered on
+the message's own id, because warden read the method perfectly well and is
+refusing it, not failing to parse it.
+
+The cost is real and belongs in the record: warden is now unusable in front of
+a server whose primary interface is resources or prompts, and correctly so.
+There is nothing an issuer could write in a token that would authorize
+`resources/read` for one uri, so the only sound answer is no.
+
+**Worth raising.** Yes. Two things, and the first is cheap. The draft should
+state the scope of §7 explicitly — that a token authorizes tool invocations and
+an enforcement point MUST NOT relay other access paths to the same authority
+without a separate grant — because implementations will otherwise ship the
+permissive reading, silently, and it will not show up in any block-rate number.
+The second is a design question the working group actually has to answer: if
+AATs are meant for MCP, `tools` is one of at least three nouns, and the
+registry in §10 has no slot for a second one. An extension constraint type
+cannot help — extensions constrain argument *values* inside a tool entry, not
+what kinds of thing may be authorized.
+
+## 16. Table 2 cannot describe an object, and `exact` is not the way out
+
+**Where.** §3.4 Table 2, the `exact`, `one_of`, `subset` and `contains` rows.
+
+**What the text says.** `exact` takes "value (any scalar)". `one_of` takes
+"values (array)" and requires the argument to "be a member of values", with no
+statement about what those members may be. `subset` and `contains` require the
+argument to "be an array" and are likewise silent on element type. No row
+mentions objects, and the section's own framing explains why: the core set is
+"intentionally limited to constraint types with simple, deterministic,
+format-independent check and subsumes rules".
+
+**What is open.** Whether `one_of` and `subset` may hold objects at all. It
+matters, because for an argument that *is* an object they are the only
+candidates: `exact` is closed by its own type restriction. Read strictly —
+Table 2's silence means unspecified, and §3.4's "two independent
+implementations MUST produce identical results" then has nothing to enforce —
+an issuer has no way to say anything about an object-valued argument except
+`wildcard`. Read permissively, the members may be objects, equality is
+whatever the implementation's deep equality is, and the two implementations
+agree only by luck.
+
+Both readings were priced against a real server. Six of
+`@modelcontextprotocol/server-memory`'s nine tools take an array of objects as
+their single argument; the thing that decides what gets written is a field
+three levels down. On the same 71-call workload:
+
+| what Table 2 allows | chain, depth 1 | permitted | overhead p50 |
+|---|---|---|---|
+| `wildcard` on every object argument | 1240 B | 71/71 | 0.271 ms |
+| `subset` over observed *elements* | 16363 B | 71/71 | 0.925 ms |
+| `one_of` over observed whole values | 16556 B | 71/71 | 1.965 ms |
+
+The middle row is the best available and it is 13× the chain for the same
+verdicts. All three permit the whole workload, and the reason differs: the
+first permits it because it inspects nothing, the other two because they carry
+a literal copy of it. Neither of the expressive rows is a policy — they are the
+recording, notarized. An issuer cannot write "an entity whose `entityType` is
+`algorithm`" or "an observation shorter than 200 characters"; the only
+alternatives are "any object" and "these objects".
+
+The permissive reading is at least worth more than the strict one: element-wise
+`subset` permits recombinations the recording never contained, where `one_of`
+over whole argument values permits exactly the recorded calls and nothing else.
+That difference is the entire distance between a constraint and a transcript,
+and it rests on a sentence the draft did not write.
+
+**What warden does.** Enforces the `exact` restriction — `decodeScalar` rejects
+an object or an array as an `exact` value, citing "value (any scalar)" — and
+takes the permissive reading for `one_of`, `subset` and `contains`, comparing
+elements by deep equality. Both choices are guesses about text that is not
+there, and the second one is the kind of guess §3.4's identical-results
+sentence exists to prevent.
+
+**Worth raising.** Yes, and it is small. Table 2's set-valued rows should say
+whether their members may be non-scalars, and if they may, the draft should
+name the equality relation the way it names RFC 8785 for canonicalization. If
+they may not, the answer to object-valued arguments is `wildcard`, which is a
+defensible answer the draft should state rather than leave implementers to
+infer — because as note 11 found for absent arguments, the deferral to
+extension types does not reach this either: an extension constrains one
+argument value, and cannot describe the shape of the object it finds there
+without re-inventing a schema language inside a constraint registry.
+
 ---
 
 # Notes on the evidence base

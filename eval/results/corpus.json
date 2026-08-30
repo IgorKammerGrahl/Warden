@@ -958,6 +958,30 @@
     "notify": false
   },
   {
+    "name": "frame-resources-read",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.2",
+    "note": "resources/read for a uri the tool interface does not authorize. Not a parse failure — warden read the method and refuses it, because there is no §3.3 capability that could describe it. Relaying it is a data-access bypass of every tool constraint on the same server.",
+    "tool": "",
+    "depth": 0,
+    "notify": false
+  },
+  {
+    "name": "frame-method-outside-the-vocabulary",
+    "corpus": "adversarial",
+    "class": "T1",
+    "profile": "warden",
+    "expect": "deny",
+    "want_ref": "ARCHITECTURE §3.2",
+    "note": "a method no version of MCP defines. The assertion is that the rule is an allow-list and not a list of known-bad methods: a server extension warden has never heard of is refused for the same reason resources/read is.",
+    "tool": "",
+    "depth": 0,
+    "notify": false
+  },
+  {
     "name": "bind-meta-not-an-object",
     "corpus": "adversarial",
     "class": "T1",

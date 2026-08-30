@@ -109,9 +109,9 @@ func (w *wardend) handshake() error {
 // for a notification, which by construction has none.
 func (w *wardend) invoke(k Case) (rpcResponse, error) {
 	if k.Raw != nil {
-		// Sent verbatim. The id inside it, if any, is the case's own: warden
-		// is expected to refuse these without opening them far enough to read
-		// an id, so there is nothing here to correlate.
+		// Sent verbatim. The id inside it, if any, is the case's own, and
+		// warden answers on null or on that id depending on whether it got far
+		// enough to read one. Either way there is nothing here to correlate.
 		w.id++
 		return w.call(k.Raw)
 	}

@@ -434,6 +434,27 @@ coded.
 
 M1 ships this pipeline in log-only mode (evaluate everything, record, forward).
 
+**Scope of enforcement, and it is a limit worth stating.** The pipeline above
+decides `tools/call`, because §3.3 capabilities describe tools and nothing
+else. Everything a client sends that is *not* a `tools/call` is therefore
+outside what a token can talk about, and in enforcing mode warden refuses it at
+the frame — with one allow-list of methods that carry no server-held content:
+`initialize`, `notifications/initialized`, `notifications/cancelled`, `ping`,
+`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, and
+responses to server-initiated requests. `internal/proxy.relayed` is the list.
+
+The allow-list is not a convenience. MCP lets a server publish the same bytes
+through a tool, a resource and a prompt, and
+`@modelcontextprotocol/server-memory` publishes its whole graph through both
+`read_graph` and `memory://knowledge-graph`. Relaying `resources/read` because
+it "is not a tools/call" hands over exactly what the tool constraints withhold,
+with no audit record — that was a real bypass, found in shakedown 2 and fixed
+here. Adding a method to `relayed` is a security decision, not a compatibility
+one; a method that returns data needs an AAT vocabulary first, and draft-01 has
+none. Operators should expect warden to be unusable in front of a server whose
+primary interface is resources or prompts. See `docs/SHAKEDOWN-2.md` and NOTES
+15.
+
 ## 4. Delegation API
 
 - Derivation is a **library call** (§6), plus `wardenctl derive` for humans/tests:

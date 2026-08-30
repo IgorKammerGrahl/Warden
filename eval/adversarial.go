@@ -608,6 +608,25 @@ func adversarialCases(w *world) []Case {
 			"cannot decide about it, so it refuses it.",
 	}, `{"jsonrpc":"2.0","id":904,"method":"tools/call","params":{"name":123,"arguments":{}}}`))
 
+	// The shakedown-2 siblings: methods warden reads perfectly well and has no
+	// capability to check. §3.3 describes tools, so relaying any other method
+	// is an unconditional grant of whatever it reaches. Found against
+	// @modelcontextprotocol/server-memory, which publishes the same graph
+	// through the read_graph tool and at memory://knowledge-graph: read_graph
+	// was denied and resources/read returned it, unaudited.
+	add(frame(Case{Name: "frame-resources-read",
+		Note: "resources/read for a uri the tool interface does not authorize. Not a parse " +
+			"failure — warden read the method and refuses it, because there is no §3.3 " +
+			"capability that could describe it. Relaying it is a data-access bypass of " +
+			"every tool constraint on the same server.",
+	}, `{"jsonrpc":"2.0","id":905,"method":"resources/read","params":{"uri":"memory://knowledge-graph"}}`))
+
+	add(frame(Case{Name: "frame-method-outside-the-vocabulary",
+		Note: "a method no version of MCP defines. The assertion is that the rule is an " +
+			"allow-list and not a list of known-bad methods: a server extension warden " +
+			"has never heard of is refused for the same reason resources/read is.",
+	}, `{"jsonrpc":"2.0","id":906,"method":"memory/dump","params":{}}`))
+
 	// _meta of the wrong shape is NOT a framing failure: the message is a
 	// readable tools/call, so it reaches bind and is denied there, on its own
 	// id, citing the clause that actually governs it. ARCHITECTURE §3.1 lists

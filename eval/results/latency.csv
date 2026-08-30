@@ -1,8 +1,8 @@
 config,depth,n,total_p50_us,total_p99_us,upstream_p50_us,upstream_p99_us,overhead_p50_us,overhead_p99_us
-enforcing,1,200,219,939,30,103,192,866
-enforcing,3,200,423,1070,38,103,376,975
-enforcing,5,200,600,1627,54,138,542,1532
-passthrough-bound,1,200,46,270,25,196,20,69
-passthrough-bound,3,200,125,407,51,195,64,160
-passthrough-bound,5,200,55,225,22,122,30,128
-passthrough-bare,0,200,20,106,12,62,7,31
+enforcing,1,200,255,755,34,246,211,605
+enforcing,3,200,373,1254,36,128,335,1115
+enforcing,5,200,606,2157,51,147,544,2034
+passthrough-bound,1,200,43,123,19,64,23,72
+passthrough-bound,3,200,56,297,25,69,34,272
+passthrough-bound,5,200,58,229,24,96,31,115
+passthrough-bare,0,200,39,240,25,219,13,49

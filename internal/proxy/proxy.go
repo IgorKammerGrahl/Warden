@@ -503,13 +503,59 @@ func isBatch(raw []byte) bool {
 	return false
 }
 
+// relayed lists the client methods warden forwards without a decision in
+// enforcing mode. Every other method — tools/call excepted, which is decided —
+// is denied.
+//
+// It is an allow-list on purpose. Shakedown 2 ran a capability that did not
+// authorize read_graph against a server that also publishes the same graph at
+// memory://knowledge-graph. read_graph was denied six times at §7 step 6b, and
+// one resources/read returned the whole thing, unaudited, because "not a
+// tools/call" was being read as "safe to relay". §3.3 capabilities describe
+// tools and nothing else, so for every other method there is no capability to
+// check against and forwarding is an unconditional grant.
+//
+// Each entry is here because it carries no server-held content: the handshake,
+// the discovery lists (schemas, names and uris — not the things behind them),
+// and the two base-protocol control messages. Adding a method to this map is a
+// security decision, not a compatibility one; a method that returns data
+// belongs in the AAT vocabulary first.
+//
+// ponytail: a map literal, not a policy language. Operators who need a
+// different set can have a flag when someone actually needs one.
+var relayed = map[string]bool{
+	"initialize":                true,
+	"notifications/initialized": true,
+	"notifications/cancelled":   true,
+	"ping":                      true,
+	"tools/list":                true,
+	"resources/list":            true,
+	"resources/templates/list":  true,
+	"prompts/list":              true,
+}
+
+// methodOf reads the method and id of a message inspect refused, for the
+// denial text and the error's id. Both are empty when the bytes are not a
+// JSON-RPC object at all, which is the case the null id is for.
+func methodOf(raw []byte) (string, json.RawMessage) {
+	var env struct {
+		Method string          `json:"method"`
+		ID     json.RawMessage `json:"id"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		return "", nil
+	}
+	return env.Method, env.ID
+}
+
 // denyUnclassified refuses a message inspect could not place, and records it.
 //
-// The error carries a null id because the id is one of the things that could
-// not be read: the message may be an array, or an object whose members are not
-// the shapes JSON-RPC gives them. JSON-RPC 2.0 §6 answers a rejected batch with
-// one error object on a null id, and the same answer is the honest one for any
-// message whose id warden will not claim to have parsed.
+// The error carries a null id when the id is one of the things that could not
+// be read: the message may be an array, or an object whose members are not the
+// shapes JSON-RPC gives them. JSON-RPC 2.0 §6 answers a rejected batch with one
+// error object on a null id, and the same answer is the honest one for any
+// message whose id warden will not claim to have parsed. A method warden read
+// and will not authorize is the other case, and it is answered on its own id.
 //
 // The audit record names no tool for the same reason. Warden refused the frame
 // without learning what the message held, and recording a guess would be a
@@ -529,16 +575,31 @@ func (p *Proxy) denyUnclassified(raw []byte, t0 time.Time) {
 	// parse this".
 	detail := "unclassifiable client message refused: warden could not read it as a " +
 		"JSON-RPC message it is able to decide about, and §3.2 denies what it cannot classify"
-	if isBatch(raw) {
+	id := json.RawMessage("null")
+	switch method, mid := methodOf(raw); {
+	case isBatch(raw):
 		detail = "JSON-RPC batch refused: warden authorizes one tools/call at a time " +
 			"and does not open a batch array"
+	case method != "" && method != "tools/call":
+		// Not a parse failure — a tools/call that lands here is one, and keeps
+		// the null id. Warden read the method and the id, and refuses
+		// because §3.3 gives it no capability to check this method against —
+		// so the id is known and JSON-RPC's reason for answering on a null one
+		// does not apply. See relayed.
+		detail = "method " + strconv.Quote(method) + " refused: warden decides tools/call " +
+			"and relays the MCP handshake and discovery methods; every other method " +
+			"reaches server-held data that §3.3 capabilities cannot describe, and " +
+			"§3.2 does not forward what it cannot authorize"
+		if len(mid) > 0 {
+			id = mid
+		}
 	}
 	const ref = "ARCHITECTURE §3.2"
 	c := &call{corr: corr, t0: t0, dec: &decision{
 		stage: "frame", ref: ref,
 		trace: []audit.Step{{Stage: "frame", Ref: ref, Outcome: "deny", Detail: detail}},
 	}}
-	if err := p.writeClient(rpcError(json.RawMessage("null"), ErrCodeDenied,
+	if err := p.writeClient(rpcError(id, ErrCodeDenied,
 		"warden: request denied by the authorization policy",
 		map[string]string{"stage": c.dec.stage, "ref": c.dec.ref})); err != nil {
 		p.logf("failed to deliver the frame denial to the client: %v", err)
@@ -575,14 +636,31 @@ func (p *Proxy) inspect(raw []byte, t0 time.Time) (*call, bool) {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params"`
 		ID     json.RawMessage `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, false
 	}
 	if env.Method != "tools/call" {
-		// Includes a response to a server-initiated request, which carries no
-		// method at all. Real servers send those; see responseKey.
-		return nil, true
+		// A response to a server-initiated request carries no method at all.
+		// Real servers send those; see responseKey. It moves client data to
+		// the server, not server data to the client, so there is nothing for
+		// a capability to say about it — but it has to look like a response,
+		// not merely lack a method.
+		if env.Method == "" {
+			if len(env.Result) > 0 || len(env.Error) > 0 {
+				return nil, true
+			}
+			return nil, false
+		}
+		if relayed[env.Method] {
+			return nil, true
+		}
+		// Everything else. Warden read the message perfectly well; what it
+		// cannot do is authorize it, and until this line that was being
+		// treated as permission to forward. See relayed.
+		return nil, false
 	}
 
 	// Stage 2, the params of something that has named itself a tools/call.
