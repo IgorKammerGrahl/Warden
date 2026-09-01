@@ -1,6 +1,7 @@
 # warden — STATE
 
-Updated: 2026-08-30 (shakedown 2 — the method allow-list, NOTES 15/16)
+Updated: 2026-08-31 (presentation pass — README, LICENSE, ADR 0001 defects
+applied, NOTES statuses; no code, no test, no number changed)
 
 This file is the cold-start handoff. A session that has read this and
 `docs/ref/draft-niyikiza-oauth-attenuating-agent-tokens-01.txt` should be able
@@ -67,12 +68,62 @@ test, since each scene asserts its own outcome. `README.md` is the front door
 that walks a stranger to it.
 
 **warden enforces the stateless half of the draft, and can now extend a chain.**
-What does not exist: no `invocation_constraints`, no budget or rate counters, no
-PoP `jti` replay set, no revocation, no policy file, no live key rotation, no
-HTTP/SSE transport, no `wardenctl`, no interop test against another
-implementation. Every one of those is state, configuration or transport rather
-than a hole in the verification algorithm — the §7 path is complete and
-enforced, and §6 now runs forwards through it.
+What does not exist: no `invocation_constraints` (detected and refused, never
+evaluated), no budget or rate counters, no PoP `jti` replay set, no revocation,
+no policy file, no live key rotation, no HTTP/SSE transport, no `wardenctl`, and
+no token-layer interop test — `interop/` covers §4.5 verdicts only, because no
+second implementation of the draft-01 token format exists. Every one of those is
+state, configuration or transport rather than a hole in the verification
+algorithm — the §7 path is complete and enforced, and §6 now runs forwards
+through it.
+
+---
+
+## The audience changed (2026-08-31)
+
+ADR 0001 and the NOTES findings were sent to the draft author, who replied
+accepting them. Consequences a later session must not undo:
+
+1. **This repository is about to be read by the spec author and by the OAuth
+   working group.** The findings are going to `oauth@ietf.org` and warden is to
+   be listed in the draft's implementation status section.
+2. **Every honest limitation stays, and stays prominent.** The README's *What is
+   not implemented* section is load-bearing, not boilerplate. Do not shorten it,
+   do not move it below the numbers, and do not add a limitation to it without
+   also adding it wherever it is measured. A block rate quoted without the
+   same-author-corpus caveat beside it is the single sentence that would cost
+   this project its credibility with this audience.
+3. **Numbers are the committed run's, not a fresh one.** `eval/results/` is the
+   n=200 run of 2026-08-30. A session that re-runs `go run ./eval` and gets
+   different numbers must update every place that quotes them together — README,
+   `eval/results/summary.md`, and the exit-state sections here — or leave them
+   all alone. Half-updated numbers read as cherry-picking.
+
+### What the presentation pass changed (documentation only)
+
+- **`README.md` rewritten** for a reader who has never seen the project: what
+  warden is (an independent Go implementation of draft-01, a personal project,
+  not a product), how to run each thing in one command each, what is implemented,
+  what is not — at equal prominence — the eval numbers with the corpus caveat and
+  the batch bypass as the documented instance of what a same-author corpus
+  misses, and pointers to NOTES and METHOD.
+- **`LICENSE`** added: Apache-2.0, canonical text (source sha256
+  `cfc7749b…d30`), chosen over MIT for the §3 patent grant, which is the thing
+  that matters for an implementation a working group may look at. The vendored
+  draft is explicitly **not** under it.
+- **`docs/ref/README.md`** added: the draft's provenance, its sha256/size/line
+  count so a reader can verify the copy is unmodified, the IETF Trust copyright,
+  and the rule that every `§x.y` in this repository resolves against that file.
+- **`docs/ref/NOTES.md`** given a standalone header — what the file is, how an
+  entry is structured, and a status legend — plus a **`**Status:**` line on all
+  16 entries**: accepted by the author (7, 11), reported (12), our own record
+  (13, 14), open observation (the rest). No entry text was touched. The *Notes on
+  the evidence base* separation is unchanged.
+- **`docs/adr/0001`**: the four deferred defects applied, the author's response
+  added as an Update at the top, one overclaim retracted. See Open decisions.
+
+Not touched, by instruction and on purpose: every check, every test, every
+measured number.
 
 ---
 
@@ -385,8 +436,9 @@ every later case.
 ```
 docs/SPEC.md, ARCHITECTURE.md, ROADMAP.md   Phase 1 design (rev. 3)
 docs/adr/0001-*.md                          invocation-granularity constraints
-docs/ref/draft-...-01.txt                   vendored AAT draft-01
-docs/ref/NOTES.md                           spec ambiguities found while implementing
+docs/ref/draft-...-01.txt                   vendored AAT draft-01 (byte-intact; all §x.y resolve here)
+docs/ref/README.md                          the draft's provenance + checksum, and the citation rule
+docs/ref/NOTES.md                           spec ambiguities found while implementing (16 entries, each status-marked)
 docs/SHAKEDOWN.md, SHAKEDOWN-2.md           the two real-peer shakedowns
 internal/aat/jcs/                            RFC 8785 JSON canonicalization
 internal/aat/jws/                            RFC 7515 compact serialization, Ed25519 only
@@ -401,7 +453,8 @@ eval/                                        M4: adversarial + benign corpora, h
 interop/                                     §4.5 verdict comparison against tenuo (corpus, Rust shim, results)
 demo/                                        M5: two agents, the real proxy, a narrated transcript
 shakedown2/                                  shakedown 2 replay harness: capability profiles, phase-1-derived values
-README.md                                    the front door: what warden is, `go run ./demo`, the numbers
+README.md                                    the front door: what warden is, what it is not, how to run it, the numbers
+LICENSE                                      Apache-2.0 (not the vendored draft — see docs/ref/README.md)
 ```
 
 **All section citations (§x.y) resolve against the vendored draft**, never
@@ -1695,7 +1748,12 @@ Still deferred, none of it blocking:
 
 ## Open decisions
 
-### Deferred ADR 0001 issues (recorded 2026-08-22, to be fixed in the M2 pass — NOT M0a/M0b)
+### Deferred ADR 0001 issues — **ALL FOUR APPLIED 2026-08-31**
+
+Recorded 2026-08-22, deferred through M2–M5, applied in the presentation pass.
+Kept below as written because the diagnosis is the part that generalizes; what
+each one became is noted under it. Nothing else in the ADR was rewritten to
+agree with the author's reply.
 
 - **ADR §3 must cite draft §8.1.2.** The draft explicitly lists cumulative /
   frequency-of-use control as a threat it does not mitigate, and points to rate
@@ -1721,11 +1779,48 @@ Still deferred, none of it blocking:
   PERMIT, or state the bounded loss explicitly. Also record single-`wardend`-
   instance as a declared v1 non-goal (in-memory counters are not shared).
 
+**What they became.** §3 gained the §8.1.2 quotation, the reframe ("the registry
+cannot host the complementary control the draft points to"), §8.5 as precedent
+that enforcement-side state is already in the model, and a note that §8.1.2 does
+not restore the fail-closed property. §4 gained *The two obligations that must be
+restated* — §3.5.1 property 2 and §10.3.1 criterion 2 both requantified over
+counter states, with a note that Decidable and Deterministic do **not** move
+because `subsumes` stays stateless — and a new *Counter state* subsection, which
+is where obligation 1 now reads "every ancestor carrying an instance of that
+type". **The Counter state subsection did not previously exist**: the ADR said
+"the applicable counter" four times and never defined it, so the recorded defect
+was against a section that was never written. It states the snapshot-interval
+loss bound as the chosen position, names durable-charge-before-PERMIT as the
+alternative and why it is not this project's call, and records single-instance
+counters as a declared v1 non-goal with the `n × max` consequence spelled out.
+
+One thing not on the list was found while applying them and fixed: the Decision
+section claimed contribution 2 came "with a working implementation and an
+evaluation". **It does not.** Only the refusal is code — `enforce.go` detects the
+member and denies at §3.2 stage 5, plus the §3.1 profile-label refusal. There is
+no counter store, no cost table, no evaluation of the member, and
+`Enforcer.InvocationConstraints` has no `wardend` flag behind it, so the gate can
+only ever be on. The overclaim is retracted in place rather than deleted.
+
 ### Still open from Phase 1
 
 - **D3 (CEL)** revisited with evidence at M2 exit, per ROADMAP.
-- **Whether the draft author agrees the granularity gap is real.** ADR 0001 is
-  written to be sendable to `niki@tenuo.ai` largely as-is. Not sent — Igor's call.
+- ~~**Whether the draft author agrees the granularity gap is real.**~~
+  **Resolved 2026-08-31: he does.** ADR 0001 was sent and answered. The
+  diagnosis in §3 is confirmed — the argument-constraint registry cannot host
+  invocation-level controls, they stay out of scope for the core, and **-02 will
+  make the boundary explicit and point to §8.10 (Approval Gates)** as the shape
+  such a control should take. The `invocation_constraints` mechanism in §4 is
+  **not** adopted; it stands as a worked example of what a profile at that
+  granularity has to define. NOTES 7 and 11 are likewise accepted for -02, NOTES
+  12 is reported with no disposition yet, and the author asked for the findings
+  to be posted to `oauth@ietf.org` and wants warden listed in the draft's
+  implementation status section.
+- **New, from that response:** whether a §8.10-shaped profile is a *sufficient*
+  home for cumulative controls or only a permitted one. A per-deployment profile
+  gives interoperating peers nothing to agree on — the same silent-vanish
+  exposure as ADR §2(a)/(b) under a different label — and §6 option 2's
+  criticality mechanism is what would make it detectable. Unaddressed.
 
 ### Enforcement-time policy
 

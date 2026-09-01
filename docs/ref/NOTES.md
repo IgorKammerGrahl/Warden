@@ -1,17 +1,43 @@
 # Spec ambiguities found while implementing
 
-Working notes on places where `draft-niyikiza-oauth-attenuating-agent-tokens-01`
-underdetermines behaviour — that is, where two conformant implementations can
-disagree. Not a bug list and not a divergence list: a divergence from the draft
-gets an ADR, this file records where the draft does not say enough to diverge
-*from*.
+Places where `draft-niyikiza-oauth-attenuating-agent-tokens-01` underdetermines
+behaviour — that is, where two conformant implementations can disagree. Not a
+bug list and not a divergence list: a divergence from the draft gets an ADR;
+this file records where the draft does not say enough to diverge *from*.
 
-Each entry: what the text says, what it leaves open, what warden does, and
-whether it is worth raising with the author.
+Written while building [warden](../../README.md), an independent Go
+implementation of the draft. Every entry came out of an implementation decision
+that had to be made and could not be made from the text — several of them out of
+running the result against real MCP servers driven by a real client, which is
+where the last two came from. Section citations resolve against
+[the vendored draft](draft-niyikiza-oauth-attenuating-agent-tokens-01.txt),
+never against a quotation.
+
+**Each entry is structured the same way:** what the text says, what it leaves
+open, what warden does and why, and whether it is worth raising. "What warden
+does" is a choice made under the ambiguity, not a reading of the draft, and it
+is labelled as one wherever the two could be confused.
+
+**Each entry carries a status**, which qualifies the evidence behind it and
+nothing else:
+
+| status | means |
+|---|---|
+| **accepted by the draft author** | reported, and the author has said it will be addressed in -02 |
+| **reported** | raised with the author; no disposition yet |
+| **open observation** | not reported. Found while implementing, written up, not sent to anyone |
+| **our own record** | not a spec question at all — a note on what warden's own claims rest on. The two of these are separated out below under *Notes on the evidence base* |
+
+An open observation is the weakest kind of entry in this file: one implementer's
+reading, unreviewed. Several are marked "worth raising: low priority" or
+"marginally" in their own text, and that assessment is the entry's, not a
+solicitation.
 
 ---
 
 ## 1. "a UUID" is undefined for the `jti` lowercase rule
+
+**Status: open observation.**
 
 **Where.** §3.2 Table 1, `jti`: REQUIRED, and "if it is a UUID it MUST be the
 lowercase hyphenated form of RFC 9562". UUIDv7 is a SHOULD, not a MUST, so a
@@ -52,6 +78,8 @@ if it matches the RFC 9562 textual format".
 
 ## 2. An empty `constraints` array is only forbidden for a derived `any`
 
+**Status: open observation.**
+
 **Where.** §4.5, the `any` bullet: "The derived `any` MUST contain at least one
 clause." §3.4 Table 2 says only that `all` and `any` carry `constraints
 (array)`.
@@ -90,6 +118,8 @@ composite types and both positions would close it.
 
 ## 3. Unrecognized *members* inside a constraint object are unlegislated
 
+**Status: open observation.**
+
 **Where.** §3.4: "Enforcement points MUST deny authorization if they encounter
 a `constraint_type` they do not recognize (fail-closed behavior)", immediately
 followed by "Enforcement points MUST ignore unrecognized top-level JWT claims".
@@ -121,6 +151,8 @@ specifically; it should also say what to do with members.
 
 ## 4. A `range` whose bounds cross is not addressed
 
+**Status: open observation.**
+
 **Where.** §3.4 Table 2, `range`: "Argument MUST be a number satisfying the
 specified bounds. Both bounds are optional."
 
@@ -144,6 +176,8 @@ empty range is already the most restrictive constraint expressible.
 mistake, and both readings are safe. One sentence would still settle it.
 
 ## 5. §4.5 declares no rule for pairs that are plausibly sound attenuations
+
+**Status: open observation.**
 
 **What the draft says.** §4.5 gives a subsumption rule per (derived, parent)
 type pair: three rules for a derived `exact`, seven same-type rules, the
@@ -180,6 +214,8 @@ are an oversight to be filled in. Either answer is implementable; the silence
 is what costs.
 
 ## 6. §7 never states that prefix presentation is safe, and it is safe only by PoP
+
+**Status: open observation.**
 
 **What the draft says.** §7 verifies the chain it is given. Step 3c requires the
 root's `del_depth` to be 0, step 4d requires each child to increment it by
@@ -226,6 +262,8 @@ and truncates it to a prefix whose PoP key they control, and the test asserts
 that only the PoP stops them.
 
 ## 7. RFC 8785 collapses integers a tool can still act on, and §7 step 7f inherits it
+
+**Status: accepted by the draft author — to be addressed in -02.**
 
 **What the draft says.** §5.2 defines `hta` as the invocation's argument map and
 §7 step 7f binds the invocation to the PoP by comparing canonical forms:
@@ -303,6 +341,8 @@ binding is exact for every value except the ones an attacker would choose.
 
 ## 8. Audience binding is delegated to deployment policy, so the default is unspecified
 
+**Status: open observation.**
+
 **What the draft says.** `aat_aud` is OPTIONAL (§5.2). §5.3 item 3 and §7 step
 7d both condition it identically: "when deployment policy requires PoP audience
 binding". §8.5 adds a SHOULD for deployments with multiple enforcement points,
@@ -334,6 +374,8 @@ that have not decided would help, but the draft's position is defensible and the
 cost here is configuration, not correctness.
 
 ## 9. §8.5's replay MUST is conditioned on a fact the protocol never carries
+
+**Status: open observation.**
 
 **What the draft says.** §8.5 is unusually direct. The timestamp window gives
 "probabilistic replay resistance and is appropriate only for idempotent,
@@ -376,6 +418,8 @@ band, by configuration", the draft should say so, because the current text reads
 as though the enforcement point already knows.
 
 ## 10. §8.9 asks for trust anchor rotation without downtime and offers nothing to build it with
+
+**Status: open observation.**
 
 **What the draft says.** §8.9 puts per-token revocation outside the
 specification: "The offline delegation model trades per-token revocation
@@ -436,6 +480,8 @@ is where the rest of revocation already lives.
 ---
 
 ## 11. §3.3 defers optional arguments to extension types that cannot express them
+
+**Status: accepted by the draft author — to be addressed in -02.**
 
 **Where.** §3.3 closed-world mode, §7 step 6b, and the extension constraint
 type registry in §3.5 / §10.3.
@@ -531,6 +577,8 @@ value.
 
 ## 12. §4.5's one-to-one clause assignment for `all` is stricter than soundness needs, and the draft's own repository does not implement it
 
+**Status: reported — no disposition yet.**
+
 **What the draft says.** §4.5, in the `all` row (draft-01 lines 1606-1613):
 
 > Clause matching for `all` is subsumption-based: for each clause C_p in the
@@ -605,6 +653,8 @@ the two should move.
 
 ## 15. The capability model has one noun, and a real protocol reaches the same data through several
 
+**Status: open observation.**
+
 **Where.** §3.3 `authorization_details`, §7 step 6b, and §5.2's `aat_tool`.
 
 **What the text says.** An `attenuating_agent_token` entry carries a `tools`
@@ -668,6 +718,8 @@ cannot help — extensions constrain argument *values* inside a tool entry, not
 what kinds of thing may be authorized.
 
 ## 16. Table 2 cannot describe an object, and `exact` is not the way out
+
+**Status: open observation.**
 
 **Where.** §3.4 Table 2, the `exact`, `one_of`, `subset` and `contains` rows.
 
@@ -742,6 +794,8 @@ the same question the entries above are asking one section at a time.
 
 ## 13. No independent implementation of the draft-01 token format exists, so the independent-conformance claim is unbacked at that layer
 
+**Status: our own record — not a spec question.**
+
 **What we assumed.** That `github.com/tenuo-ai/tenuo`, described in Appendix E
 of the draft as a reference implementation, implements draft-01's token format,
 and that feeding it a warden-minted chain would test warden's reading of §6 and
@@ -790,6 +844,8 @@ deliberately flattened (every JSON number crosses as a float) so that tenuo's
 **Worth raising.** No. This is our record, not a spec question.
 
 ## 14. tenuo's own documentation disagrees about whether it is a reference implementation — internal record only
+
+**Status: our own record — not a spec question.**
 
 **Do not raise this with the author.** The spec review in flight is a spec
 review and should stay one. This entry exists so that a later reader of entry
