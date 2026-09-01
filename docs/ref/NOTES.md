@@ -318,13 +318,29 @@ primitive.
 **Addendum, M3.** The same collapse applies to constraint *literals*, not only
 to invocation arguments, and warden is now the party producing them. §6 mints a
 child token whose `authorization_details` carries §3.4 constraint objects, and
-an AAT payload is JCS-canonicalized before it is signed (§3.1) — so a `range`
-bound of `9007199254740993` is signed as `9007199254740992`. The token then
-constrains something its issuer did not ask for, and no holder or enforcement
-point downstream can tell, because the number they receive is the only one that
-was ever signed. `Deriver.Derive` runs `jcs.CheckNumbers` over the capability
-entry before signing and refuses; `TestDeriveRefusesAmbiguousConstraintNumbers`
-pins it.
+warden canonicalizes an AAT payload before signing it — warden's own choice, not
+the draft's, which requires JCS only of the PoP payload (§5.2). So a `range`
+bound of `9007199254740993` would leave warden signed as `9007199254740992`. The
+token then constrains something its issuer did not ask for, and no holder or
+enforcement point downstream can tell, because the number they receive is the
+only one that was ever signed. `Deriver.Derive` runs `jcs.CheckNumbers` over the
+capability entry before signing and refuses;
+`TestDeriveRefusesAmbiguousConstraintNumbers` pins it.
+
+The draft-level defect does not depend on that choice, and is broader than it.
+§3.4 requires of the core constraint types that "two independent implementations
+MUST produce identical results when evaluating either predicate against the same
+inputs." A constraint literal outside binary64's exactly-representable range
+defeats that sentence with no canonicalization anywhere in the picture. An
+implementation that parses JSON numbers into binary64 — the numeric model RFC
+8785 makes interoperable, and the one step 7f's own note about `1.0` versus `1`
+already assumes — holds `exact: 9007199254740993` and `exact: 9007199254740992`
+as the same constraint; an implementation that parses exactly holds them as two.
+They disagree on the check predicate for one argument value, and on §4.5's
+`range` subsumption for one pair of bounds. Neither is non-conforming, because
+-01 never says which numeric model the predicates are evaluated in. That is the
+hook for the constraint half of this entry: unlike the argument half, it needs
+no canonicalization, no forwarding choice and no proxy behaviour to bite.
 
 Refused at mint, deliberately not at verify. A collapsed literal in a token that
 arrives from elsewhere is a defect in that issuer's output, not an escalation —
@@ -332,6 +348,17 @@ warden already refuses ambiguous arguments at bind, so nothing can exploit the
 collision from the invocation side. Adding a verify-time rejection would deny
 tokens another conforming implementation considers valid, which is an interop
 divergence and would need an ADR rather than a commit.
+
+**Correction, 2026-09-01.** The addendum above originally read "an AAT payload is
+JCS-canonicalized before it is signed (§3.1)". §3.1 does not say that, and
+nothing else in -01 does: the only JCS requirement in the draft is §5.2's, on the
+PoP JWT payload, together with the comparison in §7 step 7f. AAT payload
+canonicalization is warden's own choice. The observation stands — a collapsed
+constraint literal is unrecoverable once signed, and warden's mint path is what
+made that concrete — but the draft-level argument is §3.4's determinism
+requirement, given above, and it holds against an implementation that
+canonicalizes nothing. The version of this entry sent to the author carries the
+wrong citation. `docs/O2-PROPOSED-TEXT.md` argues from §3.4 throughout.
 
 **Worth raising.** Yes, and this is the strongest of these entries. The fix in
 the draft is one sentence in §5.2 or §7 — either "arguments MUST NOT contain
