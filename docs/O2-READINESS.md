@@ -43,7 +43,8 @@ function signature.
 | 1 | `internal/aat/jcs/jcs.go:59,155` — `Canonicalize` | `dec.UseNumber()`, then `json.Number` through `formatNumber`. This is where the collapse happens, by design: RFC 8785 §3.2.2.3 *is* binary64 serialization, and M0a exists to keep this function equal to the RFC's own vectors. |
 | 2 | `internal/aat/jcs/exact.go:37` — `CheckNumbers` | The only function in warden that holds the literal and its collapse at the same time: `UseNumber`, re-serialize through binary64, compare as `big.Rat`. Already exactly "validation begins from the original number token". |
 | 3 | `internal/proxy/enforce.go:285` — bind | Runs `CheckNumbers(rawArgs)` on `params.arguments` **before** the `json.Unmarshal` three lines later. `rawArgs` is carried from `proxy.go:673` as `json.RawMessage`, untouched off the wire. The only point in the request path where an argument literal exists and is inspected. |
-| 4 | `internal/aat/derive.go:182` — mint | `CheckNumbers(entry)` over the marshalled capability entry. `Derivation.Tools` is `map[string]json.RawMessage`, so the caller's constraint literals survive to here intact. |
+| 4 | `internal/aat/derive.go:182` — derive | `CheckNumbers(entry)` over the marshalled capability entry. `Derivation.Tools` is `map[string]json.RawMessage`, so the caller's constraint literals survive to here intact. |
+| 4b | `internal/aat/token.go:112` — `Mint` | `CheckNumbers(raw)` over the whole marshalled claim set, before the canonicalization that would destroy the evidence. The single gate every signature passes through, derived and root alike. **Added 2026-09-01; see the gap note below.** |
 | 5 | `internal/aat/token.go:151` — `Parse` | Canonicalizes `msg.Payload` **and discards the output**, keeping only the duplicate-key and UTF-8 rejections. Every literal in the token — constraint values, `exp`, `iat` — passes through this call and is thrown away. This is the hook -02's rule needs, already positioned and already paid for. |
 | 6 | `internal/aat/pop.go:54,76` — `SignPoP` / `ParsePoP` | `SignPoP` canonicalizes before signing; `ParsePoP` requires `bytes.Equal(msg.Payload, canonical)`. Consequence worth its own line: **`hta` can never carry an uncollapsed literal.** The producer's own canonicalization destroys it before the signature, and a payload that skipped that step is rejected as non-canonical. See Q4. |
 | 7 | `internal/aat/chain.go:396` — `sameCanonicalArgs` | Reads `hta` back out of the payload as raw bytes rather than re-marshalling `PoPClaims.Args`, so what is compared is what was signed. Literal bytes — but already canonical, per (6). |
@@ -61,18 +62,37 @@ function signature.
 | 14 | `internal/aat/token.go` — `Claims.IssuedAt`, `Expires`, `DelegationDepth`, `MaxDelegationDepth` | `int64`/`int`, decoded straight from the literal with no `float64` hop, so exact to int64 range and outside the collision class on the read side. But `Mint` canonicalizes claims before signing (`token.go:119`), so an `exp` above 2^53 *would* be signed collapsed and nothing checks it. Unreachable in practice — an `exp` above 2^53 is the year 285-million, and `core.Limits` caps lifetime at 90 days. |
 | 15 | `internal/aat/chain.go:404` — step 7f, args side | `json.Marshal(args)` re-serializes the parsed map. In the proxy path those values are `float64`, so this half of 7f is by construction a binary64 round-trip. It agrees with `hta` because both sides passed through the same transform — which is precisely the property that makes the collision invisible to step 7f. |
 
-### One gap found while enumerating
+### One gap found while enumerating — **CLOSED 2026-09-01**
 
-`aat.Mint` does **not** run `CheckNumbers`. Only `Deriver.details()` does. Every
-root token in the repo is minted through `aat.Mint` directly — `demo/main.go:91`,
-`eval/corpus.go:203`, `shakedown2/main.go:198`, `aattest.go:142,186` — so **root
-capability literals get no collapse check at all today.**
+**As found.** `aat.Mint` did **not** run `CheckNumbers`. Only
+`Deriver.details()` did. Every root token in the repo is minted through
+`aat.Mint` directly — `demo/main.go:91`, `eval/corpus.go:203`,
+`shakedown2/main.go:198`, `aattest.go:142,186` — so **root capability literals
+got no collapse check at all.** That was consistent with the NOTES #7 addendum
+as written (its scope was "warden is the party producing them", meaning
+derivation), but the guard was narrower than the addendum reads.
 
-That is consistent with the NOTES #7 addendum as written (its scope was "warden
-is the party producing them", meaning derivation), but the guard is narrower
-than the addendum reads. Under -02 the verify-time check subsumes it, so this
-is not worth a fix on its own — it is worth recording so nobody reads the mint
-guard as covering more than it does.
+**Closed.** `Mint` now runs `CheckNumbers(raw)` over the marshalled claim set,
+before `jcs.Canonicalize` — the ordering is the point, since canonicalizing is
+what destroys the evidence, the same relationship bind has at
+`enforce.go:285`. Whole payload rather than just `authorization_details`: the
+bytes are already in hand, and every other claim is an `int64` or a string that
+cannot collapse, so a narrower scope would have cost a loop and bought nothing.
+`TestMintRefusesAmbiguousConstraintNumbers` pins both directions — a root
+`range` bound of 9007199254740993 is refused, and 9007199254740992, one below
+and exactly representable, still mints.
+
+`Deriver.details()` is now redundant for soundness, because `Derive` ends at
+`Mint`. Kept deliberately: it fires before the I1–I4 link checks and carries a
+`core.Deny` citing §3.4 and RFC 8785 §3.2.2.3 against the constraint entry
+specifically, so an issuer gets "your constraint literal is wrong" rather than
+"your payload is wrong". `Mint` is the floor under it, not a replacement.
+
+**This does not change the -02 assessment below.** The mint-side check is
+warden refusing to *produce* a collapsing literal; the author's rule is about
+*verifying* one that arrives from elsewhere, which is still unimplemented and
+still the substance of §2. Closing this narrows population (b) in §3 and
+nothing else.
 
 ---
 
@@ -142,8 +162,9 @@ guard.
 
 Once the verifier rejects those bytes, minting them is already prohibited by the
 project rule that warden never signs what its own verifier would deny (stated at
-`token.go:95-100`). So the mint check is redundant for soundness — and worth
-keeping anyway, for one reason that is not redundant: **at mint the issuer is
+`token.go:95-100`). So the mint check is redundant for soundness — twice over, in
+fact, since as of 2026-09-01 `Mint` itself checks and `Derive` ends at `Mint`.
+It is worth keeping anyway, for one reason that is not redundant: **at mint the issuer is
 present and can be told what to write instead; at verify the holder has a signed
 token nobody can fix.** Two lines and one call to turn a runtime denial into a
 mint-time refusal is the cheapest error message in the codebase.
@@ -166,11 +187,12 @@ constraint literal since M3 (`TestDeriveRefusesAmbiguousConstraintNumbers`). No
 warden-derived token in existence carries one. The migration set is empty by
 construction, not by inspection.
 
-**(b) warden-minted roots.** `aat.Mint` has no such check — the gap above — so a
-root *could* carry one. In this repo none does: every root capability literal
-lives in `aattest.rootTools`, `demo`, `eval` and `shakedown2`, and they are
-strings and small numbers. Empty by inspection, which is weaker, and is the
-reason the gap is recorded rather than shrugged at.
+**(b) warden-minted roots.** Was the weak one: `aat.Mint` had no such check, so a
+root *could* have carried a collapsing literal, and the population was empty only
+by inspection — every root capability literal lives in `aattest.rootTools`,
+`demo`, `eval` and `shakedown2`, and they happen to be strings and small numbers.
+**Closed 2026-09-01** (see §1): `Mint` now checks, so this population is empty by
+construction like (a), and no root minted from here on can carry one.
 
 **(c) tokens from a third-party issuer.** The only population that could carry
 one, and it is empty for an entirely different reason: **no independent

@@ -470,6 +470,38 @@ func TestMintRejectsInvalidClaims(t *testing.T) {
 	}
 }
 
+// NOTES.md #7 at the issuing end, for a ROOT token. Deriver.details() has
+// refused a collapsing constraint literal since M3, but a root is minted
+// straight through Mint and had no check: an issuer could sign a range bound of
+// 9007199254740993 and every holder downstream would read 9007199254740992,
+// with nothing anywhere to say it was ever different.
+func TestMintRefusesAmbiguousConstraintNumbers(t *testing.T) {
+	priv, pub := keypair(t)
+
+	bad := rootClaims(t, pub)
+	bad.AuthorizationDetails = []json.RawMessage{json.RawMessage(
+		`{"type":"attenuating_agent_token","tools":{"read_file":{` +
+			`"size":{"constraint_type":"range","max":9007199254740993}}}}`)}
+
+	_, err := Mint(bad, priv)
+	if err == nil {
+		t.Fatal("Mint signed a root constraint bound that RFC 8785 canonicalization changes")
+	}
+	if !strings.Contains(err.Error(), "8785") {
+		t.Errorf("err = %v, want the RFC 8785 citation", err)
+	}
+
+	// The bound one below is exactly representable and must still mint: the
+	// check rejects the values that collapse, not large values as such.
+	ok := rootClaims(t, pub)
+	ok.AuthorizationDetails = []json.RawMessage{json.RawMessage(
+		`{"type":"attenuating_agent_token","tools":{"read_file":{` +
+			`"size":{"constraint_type":"range","max":9007199254740992}}}}`)}
+	if _, err := Mint(ok, priv); err != nil {
+		t.Errorf("Mint refused an exactly representable bound: %v", err)
+	}
+}
+
 // TestPoPRoundTrip covers draft §5.2, including the whole-payload JCS
 // requirement: the bytes that were signed must already be JCS-canonical.
 func TestPoPRoundTrip(t *testing.T) {

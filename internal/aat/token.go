@@ -113,6 +113,26 @@ func Mint(c Claims, key ed25519.PrivateKey) (*Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("aat: marshal claims: %w", err)
 	}
+	// NOTES.md #7, at the issuing end, and before the canonicalization below
+	// because that call is what destroys the evidence. RFC 8785 serializes
+	// every number through binary64, so a constraint literal above 2^53 would
+	// be signed as a different number than the issuer wrote — and nobody
+	// downstream can tell, because the collapsed number is the only one that
+	// was ever signed.
+	//
+	// Here rather than only in Deriver.details() because Mint is the single
+	// gate every signature passes through, derived and root alike: details()
+	// covers a derivation, and a root token minted straight through Mint had
+	// no check at all. Whole payload, not just authorization_details — the
+	// bytes are already in hand, and the remaining claims are int64s and
+	// strings that cannot collapse, so scoping it narrower would buy nothing.
+	//
+	// A derivation still fails in details() first, with a citation and a
+	// message about the constraint entry. This is the floor under it.
+	if err := jcs.CheckNumbers(raw); err != nil {
+		return nil, fmt.Errorf("aat: refusing to sign claims that RFC 8785 canonicalization "+
+			"would change: %w", err)
+	}
 	// The draft requires JCS only for the PoP payload (§5.2), not for AATs.
 	// Canonicalizing anyway costs one call and makes minting deterministic,
 	// which is what lets a test compare two independently minted tokens.
